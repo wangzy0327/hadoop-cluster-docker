@@ -47,6 +47,7 @@ class State():
     def resize(self):
         print("shcmd num : "+str(self.shcmd))
         print("hadoop group num : "+str(self.hadoop_list))
+        
         if len(self.shcmd) <= 1:
             self.one_count += 1
             if self.one_count >= 50 and len(self.hadoop_list) > 1:
@@ -55,9 +56,11 @@ class State():
                 self.reduce_group()
                 self.init_hadoop(1)
                 self.one_count = 0
-        if len(self.shcmd) > len(self.hadoop_list)*2:
+        
+        if len(self.shcmd) >= len(self.hadoop_list)*2:
             # todo  extend hadoop-docker group size
             print("\033[1;35m extend hadoop group ...... \033[1;35m")
+            #print("\033[1;35m single hadoop group ...... \033[1;35m")
             self.extend_group(len(self.shcmd))
             self.init_hadoop(len(self.shcmd))
             pass
@@ -137,6 +140,7 @@ class State():
                     uuid = line.split()[-1]
                     #print("subscribe uuid : "+uuid)
                     if self.exec_state[j] == uuid:
+                        print("\033[1;32m uuid [ "+uuid+" ] set None \033[0m!")
                         self.exec_state[j] = self.uuid[i]
                         #subprocess.check_output(['docker', 'exec', 'hadoop-master-' + j, 'bash', '-c', self.shcmd[i]])
                         print("subscribe docker exec hadoop-master-"+str(j)+" .....")
@@ -164,10 +168,11 @@ class State():
                             uuid = line.split()[-1]
                             #print("check uuid : "+uuid)
                             if sh_state == uuid:
-                                print("uuid [ "+uuid+" ] set None")
+                                print("\033[1;32m uuid [ "+uuid+" ] set None \033[0m")
                                 self.exec_state[i] = None
             print("____________________")
         print("current loop check complete...")
+        #print(round(time.time(),3))
         pass        
 
     def go(self):
@@ -194,5 +199,11 @@ if __name__ == "__main__":
     #state.uuid=['908f7dee-0a6e-11ea-84ff-35f681938c05','a2d1d326-0a6e-11ea-84ff-35f681938c05','aed091c6-0a6e-11ea-84ff-35f681938c05','ab970ad0-0a6e-11ea-84ff-35f681938c05']
     #state.exec_cmd()
     #state.parse_shell("docker exec -d hadoop-master-0 bash -c 'sh run-wordcount2.sh input/input1 output/output1 908f7dee-0a6e-11ea-84ff-35f681938c05' ")
+    startTime = round(time.time(),3)
+    print('\033[1;35m 开始时间戳:'+str(startTime)+" \033[0m")
     state.go()
+    endTime = round(time.time(),3)
+    print('\033[1;35m 结束时间戳:'+str(endTime)+" \033[0m")
+    diffTime = endTime - startTime
+    print("processing time : "+str(diffTime))
     print("______________end______________")

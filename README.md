@@ -126,7 +126,6 @@ python3 state_machine.py
 ![alt tag](https://raw.githubusercontent.com/wangzy0327/hadoop-cluster-docker/master/resize-hadoop-group-1.png)
 ![alt tag](https://raw.githubusercontent.com/wangzy0327/hadoop-cluster-docker/master/resize-hadoop-group-2.png)
 ![alt tag](https://raw.githubusercontent.com/wangzy0327/hadoop-cluster-docker/master/resize-hadoop-group-3.png)
-![alt tag](https://raw.githubusercontent.com/wangzy0327/hadoop-cluster-docker/master/resize-hadoop-group-4.png)
 
 
 

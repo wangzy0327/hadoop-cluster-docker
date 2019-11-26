@@ -41,10 +41,17 @@ echo -e "\nmkdir output.txt:"
 touch $2/output.txt
 
 echo -e "\nsave hdfs to disk"
-hdfs dfs -cat $2/part* > $2/output.txt
+(
+  flock -x 2
+  hdfs dfs -cat $2/part* > $2/output.txt
+)2<>$2/output.txt
 
 
 echo -e "\nadd subscribe"
-sed -i '$a'"sh run-wordcount2.sh $1 $2 $3" subscribe/subscribe.txt
+(
+  flock -x 3
+  sed -i '$a'"sh run-wordcount2.sh $1 $2 $3" subscribe/subscribe.txt
+)3<subscribe/subscribe.txt
+
 
 echo "--------------------end-----------------------------"
