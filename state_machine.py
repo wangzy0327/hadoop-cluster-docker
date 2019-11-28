@@ -170,7 +170,7 @@ class State():
                             if sh_state == uuid:
                                 print("\033[1;32m uuid [ "+uuid+" ] set None \033[0m")
                                 self.exec_state[i] = None
-            print("____________________")
+            print("___________________________")
         print("current loop check complete...")
         #print(round(time.time(),3))
         pass        
@@ -185,6 +185,12 @@ class State():
             self.resize()
             print("\033[1;35m exec_cmd \033[0m")
             self.exec_cmd()
+        pass
+
+    def end_symbol(self):
+        symbol = open('symbol','w')
+        symbol.write('end\n')
+        symbol.close()
         pass
 
 
@@ -202,6 +208,7 @@ if __name__ == "__main__":
     startTime = round(time.time(),3)
     print('\033[1;35m 开始时间戳:'+str(startTime)+" \033[0m")
     state.go()
+    state.end_symbol()
     endTime = round(time.time(),3)
     print('\033[1;35m 结束时间戳:'+str(endTime)+" \033[0m")
     diffTime = endTime - startTime
