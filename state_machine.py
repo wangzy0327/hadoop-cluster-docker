@@ -35,6 +35,7 @@ class State():
         pass
  
     def init_hadoop(self,count):
+        count = count if count <= self.max_num else self.max_num
         while True:
             hadoop_count = int(self.parse_shell("docker ps | grep hadoop-master | wc -l"))
             if hadoop_count >= count:
@@ -57,7 +58,7 @@ class State():
                 self.init_hadoop(1)
                 self.one_count = 0
         
-        if len(self.shcmd) >= len(self.hadoop_list)*2:
+        if len(self.shcmd) > len(self.hadoop_list):
             # todo  extend hadoop-docker group size
             print("\033[1;35m extend hadoop group ...... \033[1;35m")
             #print("\033[1;35m single hadoop group ...... \033[1;35m")
@@ -214,3 +215,4 @@ if __name__ == "__main__":
     diffTime = endTime - startTime
     print("processing time : "+str(diffTime))
     print("______________end______________")
+ 
