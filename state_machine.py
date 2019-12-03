@@ -4,7 +4,7 @@ import os
 import time
 
 class State():
-    count = 10
+    count = 7
     publish_output = "publish/publish.txt"
     subscribe_output = "subscribe/subscribe.txt"
     one_count = 0
@@ -12,7 +12,7 @@ class State():
     uuid = []
     hadoop_list = []
     exec_state = []
-    max_num = 10
+    max_num = 7
 
     def get_shcmd(self,file_name):
         f = open(file_name)
