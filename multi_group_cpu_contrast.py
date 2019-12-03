@@ -10,24 +10,35 @@ CPU_5 = [0.041, 1.945, 4.505, 4.567, 11.23, 17.233, 13.638, 10.353, 5.235, 5.866
 CPU_6 = [0.041, 2.139, 4.479, 5.162, 8.76, 10.771, 20.178, 13.755, 13.583, 4.954, 15.834, 13.597, 8.947, 4.87, 2.37, 2.302, 1.706, 2.444, 2.565, 0.345, 0.345, 0.324, 0.308, 0.366, 0.323, 0.296, 0.296, 0.307, 0.325, 0.305, 0.300, 0.300, 0.300, 0.300]
 CPU_7 = [0.041, 1.598, 5.734, 4.334, 9.935, 10.904, 10.082, 22.259, 17.52, 16.623, 5.388, 14.138, 12.635, 8.811, 3.124, 2.15, 1.909, 2.509, 1.014, 0.659, 0.562, 0.545, 0.475, 0.435, 0.415, 0.433, 0.420, 0.420, 0.420, 0.420, 0.420, 0.420, 0.420, 0.420]
 
+font1 = {
+'family' : 'Times New Roman',
+'weight' : 'normal',
+'size'   : 28,
+}
 
-plt.title('processing CPU% Analysis')
-l1, = plt.plot(t,CPU_1,color='green',label='1 hadoop group')
-l2, = plt.plot(t,CPU_2,color='darkorange',label='2 hadoop group')
-l3, = plt.plot(t,CPU_3,color='yellow',label='3 hadoop group')
-l4, = plt.plot(t,CPU_4,color='greenyellow',label='4 hadoop group')
-l5, = plt.plot(t,CPU_5,color='springgreen',label='5 hadoop group')
-l6, = plt.plot(t,CPU_6,color='darkslategrey',label='6 hadoop group')
-l7, = plt.plot(t,CPU_7,color='red',label='7 hadoop group')
+font2 = {
+'family' : 'Times New Roman',
+'weight' : 'normal',
+'size'   : 20,
+}
+
+plt.title('processing CPU% Analysis',font1)
+l1, = plt.plot(t,CPU_1,color='green',marker="o",label='1 hadoop group')
+l2, = plt.plot(t,CPU_2,color='darkorange',marker="o",label='2 hadoop group')
+l3, = plt.plot(t,CPU_3,color='yellow',marker="o",label='3 hadoop group')
+l4, = plt.plot(t,CPU_4,color='greenyellow',marker="o",label='4 hadoop group')
+l5, = plt.plot(t,CPU_5,color='springgreen',marker="o",label='5 hadoop group')
+l6, = plt.plot(t,CPU_6,color='darkslategrey',marker="o",label='6 hadoop group')
+l7, = plt.plot(t,CPU_7,color='red',marker="o",label='7 hadoop group')
 #l2, = plt.plot(x2,multi,color='red',label='multi hadoop group')
 # color: darkorange lightcoral darkgoldenrod yellow greenyellow springgreen darkslategrey deepskyblue fushsia blue
 
-x_ticks = np.arange(0,175,5)
-y_ticks = np.arange(0,25,0.5)
+x_ticks = np.arange(5,175,10)
+y_ticks = np.arange(0,25,5)
 
 plt.legend(handles=[l1,l2,l3,l4,l5,l6,l7],labels=['1-hadoop-group-CPU','2-hadoop-group-CPU','3-hadoop-group-CPU','4-hadoop-group-CPU','5-hadoop-group-CPU','6-hadoop-group-CPU','7-hadoop-group-CPU'],loc="best")
-plt.xlabel('time unit(seconds)')
-plt.ylabel('hadoop occupy CPU unit(% 32Processor)')
+plt.xlabel('time unit(seconds)',font2)
+plt.ylabel('hadoop occupy CPU unit(% 32Processor)',font2)
 
 plt.xticks(x_ticks)
 plt.yticks(y_ticks)
