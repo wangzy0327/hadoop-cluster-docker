@@ -32,6 +32,6 @@ plt.ylabel('hadoop occupy CPU unit(% 32Processor)')
 plt.xticks(x_ticks)
 plt.yticks(y_ticks)
 
-plt.savefig('.CPU%.png')
+#plt.savefig('.CPU%.png')
 
 plt.show()

@@ -26,7 +26,7 @@ l7, = plt.plot(t,MEM_7,color='red',label='7 hadoop group')
 x_ticks = np.arange(0,175,5)
 y_ticks = np.arange(0,0.4,0.01)
 
-plt.legend(handles=[l1,l2,l3,l4,l5,l6,l7],labels=['1-hadoop-group-MEM','2-hadoop-group-CPU','3-hadoop-group-CPU','4-hadoop-group-CPU','5-hadoop-group-CPU','6-hadoop-group-CPU','7-hadoop-group-MEM'],loc="best")
+plt.legend(handles=[l1,l2,l3,l4,l5,l6,l7],labels=['1-hadoop-group-MEM','2-hadoop-group-MEM','3-hadoop-group-MEM','4-hadoop-group-MEM','5-hadoop-group-MEM','6-hadoop-group-MEM','7-hadoop-group-MEM'],loc="best")
 plt.xlabel('time unit(seconds)')
 plt.ylabel('hadoop occupy MEM unit(% 62G)')
 
