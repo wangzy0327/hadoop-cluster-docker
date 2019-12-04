@@ -35,7 +35,7 @@ l7, = plt.plot(t,MEM_7,color='red',marker="o",label='7 hadoop group')
 # color: darkorange lightcoral darkgoldenrod yellow greenyellow springgreen darkslategrey deepskyblue fushsia blue
 
 x_ticks = np.arange(5,175,20)
-y_ticks = np.arange(0,0.5,0.1)
+y_ticks = np.arange(0,0.6,0.1)
 
 plt.legend(handles=[l1,l2,l3,l4,l5,l6,l7],labels=['1-hadoop-group-MEM','2-hadoop-group-MEM','3-hadoop-group-MEM','4-hadoop-group-MEM','5-hadoop-group-MEM','6-hadoop-group-MEM','7-hadoop-group-MEM'],loc="best")
 plt.xlabel('time unit(seconds)',font2)
