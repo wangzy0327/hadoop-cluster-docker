@@ -12,7 +12,7 @@ class State():
     uuid = []
     hadoop_list = []
     exec_state = []
-    max_num = 7
+    max_num = 6
 
     def get_shcmd(self,file_name):
         f = open(file_name)
@@ -171,13 +171,15 @@ class State():
                             if sh_state == uuid:
                                 print("\033[1;32m uuid [ "+uuid+" ] set None \033[0m")
                                 self.exec_state[i] = None
-            print("___________________________")
+            print("____________________")
         print("current loop check complete...")
         #print(round(time.time(),3))
         pass        
 
     def go(self):
-        while True:
+        i = 0
+        #while True:
+        while i < 1:
             print("\033[1;35m get_shcmd \033[0m")
             self.get_shcmd(self.publish_output)
             print("\033[1;35m get_hadoop \033[0m")
@@ -186,7 +188,8 @@ class State():
             self.resize()
             print("\033[1;35m exec_cmd \033[0m")
             self.exec_cmd()
-        pass
+            i+=1
+        #pass
 
     def end_symbol(self):
         symbol = open('symbol','w')
@@ -215,4 +218,3 @@ if __name__ == "__main__":
     diffTime = endTime - startTime
     print("processing time : "+str(diffTime))
     print("______________end______________")
- 

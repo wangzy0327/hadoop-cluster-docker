@@ -1,4 +1,7 @@
 NAME,CPU %,MEM USAGE / LIMIT,MEM %
-hadoop-slave-0-2,1.32%,721.5MiB / 62.39GiB,1.13%
-hadoop-slave-0-1,1.36%,708.3MiB / 62.39GiB,1.11%
-hadoop-master-0,1.52%,599.3MiB / 62.39GiB,0.94%
+hadoop-slave-1-2,1.55%,665MiB / 62.36GiB,1.04%
+hadoop-slave-1-1,1.70%,630.5MiB / 62.36GiB,0.99%
+hadoop-master-1,2.74%,990.3MiB / 62.36GiB,1.55%
+hadoop-slave-0-2,1.70%,735MiB / 62.36GiB,1.15%
+hadoop-slave-0-1,1.44%,729.2MiB / 62.36GiB,1.14%
+hadoop-master-0,1.94%,1.123GiB / 62.36GiB,1.80%

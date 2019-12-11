@@ -3,7 +3,7 @@ import time
 
 
 class Statistics():
-    log_file = "resource_log"
+    log_file = "resource/resource_log"
 
     def parse_shell(self, shcmd):
         p = subprocess.Popen(shcmd, shell=True, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -15,15 +15,25 @@ class Statistics():
         pass
     pass
 
-    def collect_resource_log(self):
+    def collect_resource_log(self,flag,index):
+        #if flag == 0:
         res = self.parse_shell(
-            "docker stats --no-stream --format 'table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.MemPerc}}' | head -1;\
-            docker stats --no-stream --format 'table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.MemPerc}}' | grep 'hadoop-[a-z]*-[0-9]?*' ")
-        self.file_operator(res)
+            "docker stats --no-stream --format 'table {{.Name}},{{.CPUPerc}},{{.MemUsage}},{{.MemPerc}}' | head -1;\
+            docker stats --no-stream --format 'table {{.Name}},{{.CPUPerc}},{{.MemUsage}},{{.MemPerc}}' | grep 'hadoop-[a-z]*-[0-9]?*' ")
+        #else:
+            #res = self.parse_shell(
+            #"docker stats --no-stream --format 'table {{.Name}},{{.CPUPerc}},{{.MemUsage}},{{.MemPerc}}' | grep 'hadoop-[a-z]*-[0-9]?*' ")
+        if flag == "":
+            self.file_operator(res,index,flag)
+        else:
+            self.file_operator(res,index,flag)
         pass
 
-    def file_operator(self, content):
-        f = open(self.log_file, 'a')
+    def file_operator(self, content,index,flag):
+        if flag == "":
+            f = open(self.log_file+"_"+str(index), 'a')
+        else:
+            f = open(self.log_file+"_"+flag+"_"+str(index),'a')
         f.write(content)
         f.close()
     
@@ -39,15 +49,28 @@ class Statistics():
         print("clear symbol")
 
     def go(self):
+        #flag = 0
+        i = 1
         while True:
-            time.sleep(1)
-            self.collect_resource_log()
+            time.sleep(0.2)
+            print("time  "+str(i)+" : "+str(round(time.time(),3)))
             info = self.judge_end()
+            print("info : "+info)
             if info == 'end':
+                print("end")
+                j = 1
+                while j < 5:
+                    print(j)
+                    time.sleep(0.2)
+                    print("time end "+str(j)+" : "+str(round(time.time(),3)))
+                    self.collect_resource_log("end",j)
+                    j+=1
                 self.clear_symbol()
                 break
-        pass
-            
+            else:
+                self.collect_resource_log("",i)
+                i+=1
+            pass
 
 if __name__ == "__main__":
     statictis = Statistics()
