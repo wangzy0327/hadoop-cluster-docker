@@ -23,7 +23,7 @@ do
    echo "start hadoop-master-${j} container..."
    sudo docker run -itd \
                 --net=hadoop-${j} \
-                -p 5007${j}:50070 \
+                -p 5006${j}:50070 \
                 -p 900${j}:8088 \
                 -v /home/wzy/hadoop-cluster-docker/input:/root/input \
                 -v /home/wzy/hadoop-cluster-docker/output:/root/output \
@@ -67,12 +67,12 @@ do
    i=1
    while [ $i -lt $N ]
    do
-      sudo docker exec -dit hadoop-slave-$j-$i /bin/bash -c "sed 's/hadoop-master/hadoop-master-'${j}'/g' '${hadoop_home_config}'/yarn-site.xml > '${hadoop_home_config}'/yarn-site.xml.tmp && mv -f '${hadoop_home_config}'/yarn-site.xml.tmp '${hadoop_home_config}'/yarn-site.xml && sed 's/hadoop-master/hadoop-master-'${j}'/g' '${hadoop_home_config}'/core-site.xml > '${hadoop_home_config}'/core-site.xml.tmp && mv -f '${hadoop_home_config}'/core-site.xml.tmp '${hadoop_home_config}'/core-site.xml  && echo  -e '$text' | tee '${hadoop_home_config}'/slaves"
+      sudo docker exec -dit hadoop-slave-$j-$i /bin/bash -c "sed -i 's/hadoop-master/hadoop-master-'${j}'/g' '${hadoop_home_config}'/yarn-site.xml  && sed -i 's/hadoop-master/hadoop-master-'${j}'/g' '${hadoop_home_config}'/core-site.xml  && echo  -e '$text' | tee '${hadoop_home_config}'/slaves"
       i=$(( $i + 1 ))
    done
 #   sudo docker exec -it hadoop-slave-0-1 /bin/bash -c "sed 's/hadoop-master/hadoop-master-0/g' '${hadoop_home_config}'/yarn-site.xml > '${hadoop_home_config}'/yarn-site.xml.tmp && mv -f '${hadoop_home_config}'/yarn-site.xml.tmp '${hadoop_home_config}'/yarn-site.xml && sed 's/hadoop-master/hadoop-master-0/g' '${hadoop_home_config}'/core-site.xml > '${hadoop_home_config}'/core-site.xml.tmp && mv -f '${hadoop_home_config}'/core-site.xml.tmp '${hadoop_home_config}'/core-site.xml  && echo  -e '$text' | tee '${hadoop_home_config}'/slaves"
 #  sudo docker exec -it hadoop-slave-0-2 /bin/bash -c "sed 's/hadoop-master/hadoop-master-0/g' '${hadoop_home_config}'/yarn-site.xml > '${hadoop_home_config}'/yarn-site.xml.tmp && mv -f '${hadoop_home_config}'/yarn-site.xml.tmp '${hadoop_home_config}'/yarn-site.xml && sed 's/hadoop-master/hadoop-master-0/g' '${hadoop_home_config}'/core-site.xml > '${hadoop_home_config}'/core-site.xml.tmp && mv -f '${hadoop_home_config}'/core-site.xml.tmp '${hadoop_home_config}'/core-site.xml  && echo  -e '$text' | tee '${hadoop_home_config}'/slaves"
-   sudo docker exec -dit hadoop-master-$j /bin/bash -c "sed 's/hadoop-master/hadoop-master-'${j}'/g' '${hadoop_home_config}'/yarn-site.xml > '${hadoop_home_config}'/yarn-site.xml.tmp && mv -f '${hadoop_home_config}'/yarn-site.xml.tmp '${hadoop_home_config}'/yarn-site.xml && sed 's/hadoop-master/hadoop-master-'${j}'/g' '${hadoop_home_config}'/core-site.xml > '${hadoop_home_config}'/core-site.xml.tmp && mv -f '${hadoop_home_config}'/core-site.xml.tmp '${hadoop_home_config}'/core-site.xml  && echo  -e '$text' | tee '${hadoop_home_config}'/slaves && ./start-hadoop.sh"
+   sudo docker exec -dit hadoop-master-$j /bin/bash -c "sed -i 's/hadoop-master/hadoop-master-'${j}'/g' '${hadoop_home_config}'/yarn-site.xml  && sed -i 's/hadoop-master/hadoop-master-'${j}'/g' '${hadoop_home_config}'/core-site.xml  && echo  -e '$text' | tee '${hadoop_home_config}'/slaves && ./start-hadoop.sh"
     sleep 3
 
     echo "hadoop-${j} init complete"
