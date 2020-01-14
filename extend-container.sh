@@ -21,10 +21,15 @@ do
    # start hadoop master container
    sudo docker rm -f hadoop-master-${j} &> /dev/null
    echo "start hadoop-master-${j} container..."
+   hdfsport=$((50080+$j))
+   yarnport=$((9000+$j))
+   echo "hadoop-${j} hdfs port : ${hdfsport}"
+   echo "hadoop-${j} yarn port : ${yarnport}"
+
    sudo docker run -itd \
                 --net=hadoop-${j} \
-                -p 5006${j}:50070 \
-                -p 900${j}:8088 \
+                -p ${hdfsport}:50070 \
+                -p ${yarnport}:8088 \
                 -v /home/wzy/hadoop-cluster-docker/input:/root/input \
                 -v /home/wzy/hadoop-cluster-docker/output:/root/output \
                 -v /home/wzy/hadoop-cluster-docker/run-wordcount2.sh:/root/run-wordcount2.sh \
