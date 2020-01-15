@@ -1,0 +1,41 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: pl-server
+  labels:
+    k8s-app: agent
+spec:
+  selector:
+    matchLabels: 
+      name: pl-server
+  template:
+    metadata:
+      labels:
+        name: pl-server
+    spec:
+      containers:
+      - name: pl-server
+        image: plserver_ubuntu
+        imagePullPolicy: IfNotPresent
+        resources:
+          limits:
+            memory: 200Mi
+          requests:
+            cpu: 50m
+            memory: 100Mi
+        command: [ "python"]
+        args: ["/home/wzy/hadoop-cluster-docker/server/server.py"]
+        ports:
+        - containerPort: 8800
+          hostPort: 8081
+        workingDir: "/home/wzy/hadoop-cluster-docker"
+        volumeMounts:
+        - name: projectdir
+          mountPath: /home/wzy/hadoop-cluster-docker
+      terminationGracePeriodSeconds: 30
+      volumes:
+      - name: projectdir
+        hostPath:
+          path: /home/wzy/hadoop-cluster-docker
+        
+
