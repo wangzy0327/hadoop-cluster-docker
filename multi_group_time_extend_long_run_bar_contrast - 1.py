@@ -46,10 +46,10 @@ label_list = ['1任务','2任务','3任务','4任务','5任务','6任务','7任�
 
 num_list1 = [70.757,76.630,78.212,74.223,74.272,73.701,75.170,92.714,101.522,114.410,113.793,124.259,124.203,139.540,142.932]      # 纵坐标值1
 num_list2 = [43.803,43.993,45.653,50.866,55.572,56.218,58.943,62.632,67.491,72.281,71.123,70.421,73.694,78.451,80.490]      # 纵坐标值2
-num_list3 = [65.554,58.649,61.790,65.177,62.811,71.838,73.860,73.961,79.639,81.998,82.563,83.191,102.655,102.915,98.424]    # 2节点从0扩容
-num_list4 = [41.540,45.865,46.157,48.699,51.553,53.863,53.898,52.519,56.152,57.019,67.552,64.308,63.511,66.796,67.437]
+# num_list3 = [65.554,58.649,61.790,65.177,62.811,71.838,73.860,73.961,79.639,81.998,82.563,83.191,102.655,102.915,98.424]    # 2节点从0扩容
+# num_list4 = [41.540,45.865,46.157,48.699,51.553,53.863,53.898,52.519,56.152,57.019,67.552,64.308,63.511,66.796,67.437]
 
-x = [i *4 for i in range(len(num_list1))]
+x = [i *2 for i in range(len(num_list1))]
 """
 绘制条形图
 left:长条形中点横坐标
@@ -57,10 +57,10 @@ height:长条形高度
 width:长条形宽度，默认值0.8
 label:为后面设置legend准备cm
 """
-rects1 = plt.bar(x=x, height=num_list1, width=0.8, alpha=0.8, color='red', label="从0扩容")
-rects2 = plt.bar(x=[i + 0.8 for i in x], height=num_list2, width=0.8, color='green', label="无需扩容")
-rects3 = plt.bar(x=[i + 0.8*2 for i in x], height=num_list3, width=0.8, color='lightskyblue', label="2节点从0扩容")
-rects4 = plt.bar(x=[i + 0.8*3 for i in x], height=num_list4, width=0.8, color='darkorange', label="2节点无需扩容")
+rects1 = plt.bar(x=x, height=num_list1, width=0.8, alpha=0.8, color='red', label="单节点从0扩容")
+rects2 = plt.bar(x=[i + 0.8 for i in x], height=num_list2, width=0.8, color='green', label="单节点无需扩容")
+# rects3 = plt.bar(x=[i + 0.8*2 for i in x], height=num_list3, width=0.8, color='lightskyblue', label="2节点从0扩容")
+# rects4 = plt.bar(x=[i + 0.8*3 for i in x], height=num_list4, width=0.8, color='darkorange', label="2节点无需扩容")
 plt.ylim(0, 180)     # y轴取值范围
 plt.ylabel("任务处理时间  单位(秒)")
 """
@@ -68,8 +68,8 @@ plt.ylabel("任务处理时间  单位(秒)")
 参数一：中点坐标
 参数二：显示值
 """
-plt.xticks([index + 1.2 for index in x], label_list)
-plt.xlabel("hadoop容器组数量  单位(1)")
+plt.xticks([index + 0.4 for index in x], label_list)
+plt.xlabel("平均每个节点任务总量”（1~15任务）")
 plt.title("hadoop扩容——处理任务时间对比")
 plt.legend()     # 设置题注
 # 编辑文本
@@ -79,10 +79,10 @@ for rect in rects1:
 for rect in rects2:
     height = rect.get_height()
     plt.text(rect.get_x() + rect.get_width() / 2, height+1, str(round(height,1)), ha="center", va="bottom")
-for rect in rects3:
-    height = rect.get_height()
-    plt.text(rect.get_x() + rect.get_width() / 2, height+1, str(round(height,1)), ha="center", va="bottom")
-for rect in rects4:
-    height = rect.get_height()
-    plt.text(rect.get_x() + rect.get_width() / 2, height+1, str(round(height,1)), ha="center", va="bottom")
+# for rect in rects3:
+#     height = rect.get_height()
+#     plt.text(rect.get_x() + rect.get_width() / 2, height+1, str(round(height,1)), ha="center", va="bottom")
+# for rect in rects4:
+#     height = rect.get_height()
+#     plt.text(rect.get_x() + rect.get_width() / 2, height+1, str(round(height,1)), ha="center", va="bottom")
 plt.show()
