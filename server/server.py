@@ -35,6 +35,47 @@ logger = logging.getLogger(__name__)
 
 # 初始化Flask应用
 app = Flask(__name__)
+
+# -------------------------- 修复：适配Werkzeug 1.0.1，自定义访问日志格式 --------------------------
+import time
+from flask import request, g
+
+# 1. 禁用Flask默认的访问日志（避免重复输出，且默认日志含年月日）
+# 获取werkzeug的日志记录器，设置级别为WARNING，不输出INFO级别的访问日志
+werkzeug_logger = logging.getLogger('werkzeug')
+werkzeug_logger.setLevel(logging.WARNING)
+
+# 2. 在请求开始时记录开始时间（用于计算耗时）
+@app.before_request
+def record_start_time():
+    g.start_time = time.time()  # 将开始时间存入g对象（请求上下文共享）
+
+# 3. 在请求结束后，自定义输出访问日志（仅含时分秒）
+@app.after_request
+def custom_access_log(response):
+    # 跳过Flask自身的健康检查请求（如/favicon.ico），避免无用日志
+    if request.path == '/favicon.ico':
+        return response
+
+    # 计算请求耗时（毫秒）
+    elapsed_time = (time.time() - g.start_time) * 1000
+
+    # 获取日志所需字段
+    current_time = time.strftime('%H:%M:%S')  # 仅时分秒
+    remote_addr = request.remote_addr  # 客户端IP
+    request_line = f"{request.method} {request.path} {request.environ.get('SERVER_PROTOCOL', 'HTTP/1.1')}"  # 请求行（如POST /hadoop HTTP/1.1）
+    status_code = response.status_code  # 响应状态码（如200）
+    content_length = response.headers.get('Content-Length', '-')  # 响应长度
+
+    # 自定义日志格式（与业务日志时间格式统一）
+    log_msg = f"{current_time} - INFO - [访问日志] {remote_addr} - \"{request_line}\" {status_code} {content_length} - {elapsed_time:.2f}ms"
+    
+    # 输出日志（使用自定义的logger，确保格式统一）
+    logger.info(log_msg)
+
+    return response
+# -----------------------------------------------------------------------------------
+
 # 配置参数
 PUBLISH_QUEUE = "/home/wzy/hadoop-cluster-docker/publish/publish.txt"
 SUBSCRIBE_QUEUE = "/home/wzy/hadoop-cluster-docker/subscribe/subscribe.txt"
@@ -42,6 +83,7 @@ MAX_HADOOP_GROUPS = 6  # 最大容器组数量
 CHECK_INTERVAL = 10  # 监控间隔（秒）
 # 创建线程池控制并发任务数
 executor = ThreadPoolExecutor(max_workers=10)
+
 
 
 class ClusterManager:
@@ -74,6 +116,81 @@ class ClusterManager:
             logger.error(f"获取Hadoop容器数量失败: {str(e)}")
             return 1
 
+    def is_container_available(self, container_name):
+        """检查容器是否已启动且Hadoop服务正常（避免分配未初始化的容器）"""
+        try:
+            # 1. 检查容器是否在运行中
+            container_running = subprocess.run(
+                f"docker inspect --format '{{{{.State.Running}}}}' {container_name}",
+                shell=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                encoding='utf-8'
+            ).stdout.strip() == "true"
+            if not container_running:
+                logger.info(f"容器 {container_name} 未运行，跳过分配")
+                return False
+
+            # 2. 增加内部重试：等待Hadoop启动（最多重试5次，每次间隔2秒）
+            hadoop_running = False
+            for _ in range(5):
+                result = subprocess.run(
+                    f"docker exec {container_name} jps | grep NameNode",
+                    shell=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    encoding='utf-8'
+                )
+                if result.returncode == 0:
+                    hadoop_running = True
+                    break
+                time.sleep(2)  # 等待2秒后重试
+
+            if not hadoop_running:
+                logger.info(f"容器 {container_name} 内Hadoop未启动（重试5次后仍失败），跳过分配")
+                return False
+
+            return True
+        except Exception as e:
+            logger.warning(f"检查容器 {container_name} 可用性失败: {str(e)}")
+            return False
+        
+    def update_available_containers(self):
+        """更新可用容器列表（仅保留运行中且Hadoop正常的容器）"""
+        try:
+            # 获取所有 hadoop-master 容器
+            all_masters = subprocess.check_output(
+                "docker ps --filter 'name=hadoop-master-' --format '{{.Names}}' | sort",
+                shell=True,
+                encoding='utf-8'
+            ).splitlines()
+            # 过滤可用容器
+            self.available_containers = [
+                master for master in all_masters 
+                if self.is_container_available(master)
+            ]
+            logger.info(f"更新可用容器列表: {self.available_containers}")
+        except Exception as e:
+            logger.error(f"更新可用容器列表失败: {str(e)}")
+            self.available_containers = ["hadoop-master-0"]  # 兜底
+
+    def reassign_pending_tasks(self):
+        """重新分配队列中未执行的任务到新容器（扩容后调用）"""
+        with self.lock:
+            # 先更新可用容器列表
+            self.update_available_containers()
+            if len(self.available_containers) <= 1:
+                return  # 仅1个容器，无需重分配
+
+            # 遍历任务队列，重分配未执行的任务
+            for idx, task in enumerate(self.task_queue):
+                # 仅重分配绑定到旧容器（hadoop-master-0）且未执行的任务
+                if task.get("container") == "hadoop-master-0":
+                    # 轮询分配到新容器（基于任务索引取模，避免集中）
+                    new_container = self.available_containers[idx % len(self.available_containers)]
+                    logger.info(f"任务 {task['uuid']} 从 hadoop-master-0 重分配到 {new_container}")
+                    self.task_queue[idx]["container"] = new_container  # 更新任务的容器字段        
+        
     def extend_cluster(self, target_num):
         """扩容Hadoop集群到目标数量"""
         if target_num > MAX_HADOOP_GROUPS:
@@ -82,30 +199,60 @@ class ClusterManager:
         if target_num > current_num:
             logger.info(f"扩容集群: {current_num} -> {target_num}")
             try:
-                # 使用universal_newlines替代text参数
                 result = subprocess.run(
-                    f"sh /home/wzy/hadoop-cluster-docker/extend-container.sh {target_num}",
+                    f"bash /home/wzy/hadoop-cluster-docker/extend-container2.sh {target_num}",
                     shell=True,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
                     universal_newlines=True,
-                    timeout=300  # 增加超时控制（5分钟）
+                    timeout=300
                 )
                 if result.returncode != 0:
                     logger.error(f"扩容脚本执行失败，退出码: {result.returncode}, 输出: {result.stdout}")
                 else:
                     logger.info(f"扩容脚本执行成功，输出: {result.stdout}")
-                time.sleep(5)
+                    # 扩容完成后，等待新容器Hadoop启动
+                    time.sleep(10)
+                    # 主动检查新容器可用性
+                    new_masters = [f"hadoop-master-{i}" for i in range(current_num, target_num)]
+                    for master in new_masters:
+                        if self.is_container_available(master):
+                            logger.info(f"新容器 {master} 已就绪，可分配任务")
+                        else:
+                            logger.warning(f"新容器 {master} 尚未就绪，需等待Hadoop启动")
+                    # 核心新增：重分配队列中未执行的任务
+                    self.reassign_pending_tasks()
             except subprocess.TimeoutExpired:
                 logger.error(f"扩容脚本执行超时（超过5分钟）")
             except Exception as e:
                 logger.error(f"扩容集群失败: {str(e)}")
 
+    def get_tasks_running_containers(self):
+        """获取正在运行任务的容器列表"""
+        with self.lock:
+            # 收集所有状态为 running 的任务绑定的容器
+            running_containers = set()
+            for task in self.task_queue:
+                if task.get("status") == "running":
+                    running_containers.add(task["container"])
+            return list(running_containers)
+
     def reduce_cluster(self, target_num):
-        """缩容Hadoop集群到目标数量"""
+        """缩容Hadoop集群到目标数量（仅在任务列表为空时执行）"""
+        # 关键修复：检查任务列表是否为空，非空则不执行缩容
+        with self.lock:
+            if len(self.task_queue) > 0:
+                logger.info(f"任务列表非空（{len(self.task_queue)}个任务），不执行缩容")
+                return
+
         if target_num < 1:
             target_num = 1
         current_num = self.get_hadoop_count()
+        if target_num >= current_num:
+            logger.info(f"目标数量{target_num}不小于当前数量{current_num}，不执行缩容")
+            return
+
+        logger.info(f"任务列表为空，执行缩容集群: {current_num} -> {target_num}")
         if target_num < current_num:
             logger.info(f"缩容集群: {current_num} -> {target_num}")
             try:
@@ -139,7 +286,7 @@ class ClusterManager:
             self.task_queue = [t for t in self.task_queue if t['uuid'] != uuid]
 
     def monitor_and_adjust(self):
-        """监控任务队列并动态调整集群规模"""
+        """监控任务队列并动态调整集群规模（修改缩容触发条件)"""
         while True:
             task_count = self.get_task_count()
             current_groups = self.get_hadoop_count()
@@ -148,51 +295,56 @@ class ClusterManager:
             # 扩容策略
             if task_count > current_groups:
                 self.extend_cluster(task_count)
-            # 缩容策略
-            elif task_count < current_groups // 2 and current_groups > 1:
-                self.reduce_cluster(max(1, task_count))
+            # 缩容策略修改：仅当任务数为0时才考虑缩容
+            elif task_count == 0 and current_groups > 1:
+                # 任务为空时缩容到1个容器组（或根据实际需求调整）
+                self.reduce_cluster(1)
 
             time.sleep(CHECK_INTERVAL)
 
     def process_tasks(self):
-        """处理队列中的任务"""
+        """处理队列中的任务 （并行监控，非阻塞）"""
         while True:
             with self.lock:
-                tasks = list(self.task_queue)  # 复制当前任务列表（避免迭代中修改）
+                # 只取未启动的任务（新增任务状态标记，避免重复启动）
+                pending_tasks = [t for t in self.task_queue if t.get("status") != "running"]
+                # 标记任务为已启动（避免重复处理）
+                for task in pending_tasks:
+                    task["status"] = "running"
 
-            for task in tasks:
+            for task in pending_tasks:
                 try:
-                    # 执行Hadoop任务（后台执行，不阻塞）
+                    # 1. 启动任务（后台执行）
                     cmd = f"docker exec -d {task['container']} bash -c '{task['command']}'"
                     logger.info(f"执行任务: {cmd}")
-                    # 使用universal_newlines替代text参数
                     result = subprocess.run(
                         cmd,
                         shell=True,
                         stdout=subprocess.PIPE,
                         stderr=subprocess.STDOUT,
                         universal_newlines=True,
-                        timeout=60  # 执行命令超时控制（1分钟）
+                        timeout=60
                     )
                     if result.returncode != 0:
-                        logger.error(f"任务启动失败，退出码: {result.returncode}, 输出: {result.stdout}")
-                        self.send_callback(task['callback_url'], task['uuid'], False, f"任务启动失败: {result.stdout}")
+                        logger.error(f"任务启动失败 {task['uuid']}: {result.stdout}")
+                        task["status"] = "failed"
+                        self.send_callback(...)
                         self.remove_task(task['uuid'])
                         continue
-                    
-                    # 监控任务完成状态
-                    self.monitor_task_completion(task)
-                    
-                except subprocess.TimeoutExpired:
-                    logger.error(f"任务启动命令超时（超过1分钟）: {task['uuid']}")
-                    self.send_callback(task['callback_url'], task['uuid'], False, "任务启动超时")
-                    self.remove_task(task['uuid'])
+
+                    # 2. 关键修复：用线程池并行监控任务完成（非阻塞）
+                    executor.submit(
+                        self.monitor_task_completion,  # 提交监控逻辑到线程池
+                        task
+                    )
+
                 except Exception as e:
                     logger.error(f"任务处理失败 {task['uuid']}: {str(e)}")
-                    self.send_callback(task['callback_url'], task['uuid'], False, str(e))
+                    task["status"] = "failed"
+                    self.send_callback(...)
                     self.remove_task(task['uuid'])
 
-            time.sleep(2)  # 检查间隔
+            time.sleep(2)  # 降低循环频率，减少资源占用
 
     def monitor_task_completion(self, task):
         """监控任务完成状态并从独立日志文件提取结果（修复路径重复问题）"""
@@ -266,27 +418,31 @@ class ClusterManager:
         )
         self.remove_task(task['uuid'])
 
-    def send_callback(self, url, uuid, success, message):
-        """发送回调结果给轻容器"""
-        try:
-            data = {
-                "uuid": uuid,
-                "success": success,
-                "message": message,
-                "timestamp": time.strftime("%H:%M:%S")  # 时间格式改为时分秒
-            }
-            response = requests.post(
-                url,
-                json=data,
-                headers={"Content-Type": "application/json"},
-                timeout=10
-            )
-            response.raise_for_status()  # 触发HTTP错误（如4xx/5xx）
-            logger.info(f"回调结果发送成功 {uuid}: {response.status_code}")
-        except requests.exceptions.RequestException as e:
-            logger.error(f"回调结果发送失败 {uuid}: {str(e)}")
-        except Exception as e:
-            logger.error(f"回调处理异常 {uuid}: {str(e)}")
+    def send_callback(self, url, uuid, success, message, max_retries=3, retry_interval=5):
+        """发送回调结果，支持失败重试"""
+        for attempt in range(max_retries):
+            try:
+                data = {
+                    "uuid": uuid,
+                    "success": success,
+                    "message": message,
+                    "timestamp": time.strftime("%H:%M:%S")
+                }
+                response = requests.post(
+                    url,
+                    json=data,
+                    headers={"Content-Type": "application/json"},
+                    timeout=10  # 单次请求超时10秒
+                )
+                response.raise_for_status()
+                logger.info(f"回调结果发送成功（第{attempt+1}次） {uuid}: {response.status_code}")
+                return  # 成功则退出重试
+            except requests.exceptions.RequestException as e:
+                logger.warning(f"回调结果发送失败（第{attempt+1}次） {uuid}: {str(e)}")
+                if attempt < max_retries - 1:
+                    time.sleep(retry_interval)  # 重试间隔5秒
+        # 所有重试失败
+        logger.error(f"回调结果发送失败（已重试{max_retries}次） {uuid}")
 
 
 def parse_shell(shcmd):
@@ -520,20 +676,55 @@ def handler_hadoop():
                 return f"缺少参数: {param}", 400
 
         uuid_str = str(uuid.uuid1())
-        # 获取可用的容器
-        container = "hadoop-master-0"
-        
+        selected_master = None
+        retry_count = 0
+        max_retry = 5  # 增加重试次数
+        retry_interval = 5
+
+        while retry_count < max_retry and not selected_master:
+            try:
+                # 调用 ClusterManager 的方法更新可用容器列表
+                cluster_manager.update_available_containers()
+                available_masters = cluster_manager.available_containers
+                if not available_masters:
+                    logger.warning(f"第{retry_count+1}次尝试：无可用容器")
+                    retry_count += 1
+                    time.sleep(retry_interval)
+                    continue
+
+                # 新任务优先分配到“非hadoop-master-0”的容器（负载均衡）
+                # 过滤出除 hadoop-master-0 外的可用容器
+                non_default_masters = [m for m in available_masters if m != "hadoop-master-0"]
+                if non_default_masters:
+                    # 新任务分配到非默认容器（轮询）
+                    task_count = cluster_manager.get_task_count()
+                    selected_master = non_default_masters[task_count % len(non_default_masters)]
+                else:
+                    # 仅默认容器可用，分配到 hadoop-master-0
+                    selected_master = available_masters[0]
+
+                logger.info(f"新任务 {uuid_str} 分配到容器: {selected_master}（可用容器：{available_masters}）")
+
+            except Exception as e:
+                logger.warning(f"第{retry_count+1}次尝试获取容器失败: {str(e)}")
+                retry_count += 1
+                time.sleep(retry_interval)
+
+        # 兜底：若重试失败，使用默认容器
+        if not selected_master:
+            selected_master = "hadoop-master-0"
+            logger.warning(f"所有重试失败，新任务 {uuid_str} 分配到默认容器: {selected_master}")
+
         # 添加任务到队列
         cluster_manager.add_task({
             "uuid": uuid_str,
             "command": f"sh /root/run-wordcount2.sh {data['input']} {data['output']} {uuid_str}",
-            "container": container,
+            "container": selected_master,  # 绑定到新选择的容器
             "callback_url": data["callback_url"],
             "timestamp": time.time()
         })
 
         return jsonify({"uuid": uuid_str})
-
     except Exception as e:
         logger.error(f"/hadoop 错误: {str(e)}")
         return str(e), 500
