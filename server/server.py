@@ -182,10 +182,10 @@ class ClusterManager:
             if len(self.available_containers) <= 1:
                 return  # 仅1个容器，无需重分配
 
-            # 遍历任务队列，重分配未执行的任务
+            # 遍历任务队列，仅重分配「未启动」且绑定到旧容器（hadoop-master-0）的任务
             for idx, task in enumerate(self.task_queue):
-                # 仅重分配绑定到旧容器（hadoop-master-0）且未执行的任务
-                if task.get("container") == "hadoop-master-0":
+                # 仅重分配绑定到旧容器（hadoop-master-0）且未执行的任务 增加 task.get("status") != "running" 判断
+                if task.get("container") == "hadoop-master-0" and task.get("status") != "running":
                     # 轮询分配到新容器（基于任务索引取模，避免集中）
                     new_container = self.available_containers[idx % len(self.available_containers)]
                     logger.info(f"任务 {task['uuid']} 从 hadoop-master-0 重分配到 {new_container}")
@@ -204,7 +204,7 @@ class ClusterManager:
                     shell=True,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
-                    universal_newlines=True,
+                    universal_newlines='utf-8', # 显式指定解码编码为 UTF-8，匹配脚本输出
                     timeout=300
                 )
                 if result.returncode != 0:
@@ -258,11 +258,11 @@ class ClusterManager:
             try:
                 # 使用universal_newlines替代text参数
                 result = subprocess.run(
-                    f"sh /home/wzy/hadoop-cluster-docker/reduce-container.sh {target_num}",
+                    f"bash /home/wzy/hadoop-cluster-docker/reduce-container.sh {target_num}",
                     shell=True,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
-                    universal_newlines=True,
+                    universal_newlines='utf-8', # 显式指定解码编码为 UTF-8，匹配脚本输出
                     timeout=300
                 )
                 if result.returncode != 0:
@@ -286,7 +286,7 @@ class ClusterManager:
             self.task_queue = [t for t in self.task_queue if t['uuid'] != uuid]
 
     def monitor_and_adjust(self):
-        """监控任务队列并动态调整集群规模（修改缩容触发条件)"""
+        # """监控任务队列并动态调整集群规模（修改缩容触发条件)"""
         while True:
             task_count = self.get_task_count()
             current_groups = self.get_hadoop_count()
@@ -348,72 +348,75 @@ class ClusterManager:
 
     def monitor_task_completion(self, task):
         """监控任务完成状态并从独立日志文件提取结果（修复路径重复问题）"""
-        max_wait_time = 3600  # 最大等待时间(秒)
-        check_interval = 5     # 检查间隔(秒)
+        max_wait_time = 3600
+        check_interval = 5
         start_time = time.time()
-        # 定义日志目录的绝对路径（根据实际目录结构计算）
-        # server.py位于/home/wzy/hadoop-cluster-docker/server
-        # logs目录位于/home/wzy/hadoop-cluster-docker
-        BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        LOGS_ABS_DIR = os.path.join(BASE_DIR, "logs")
-        logger.info(f"日志文件根目录: {LOGS_ABS_DIR}")
+
+        # 获取项目根目录的绝对路径
+        current_file_dir = os.path.dirname(os.path.abspath(__file__))  # /home/wzy/hadoop-cluster-docker/server
+        project_root = os.path.dirname(current_file_dir)              # /home/wzy/hadoop-cluster-docker
+
+        # 绝对路径用于实际文件操作
+        LOGS_ABS_DIR = os.path.join(project_root, "logs")
+
+        # 相对显示路径（从 hadoop-cluster-docker 开始）
+        try:
+            # 将绝对路径转换为以 PROJECT_NAME 开头的“伪相对路径”
+            # 方法：从 project_root 中提取 PROJECT_NAME 及之后的部分
+            project_base_name = os.path.basename(project_root)  # "hadoop-cluster-docker"
+            display_logs_dir = os.path.join(project_base_name, "logs")  # "hadoop-cluster-docker/logs"
+        except Exception:
+            display_logs_dir = "logs"  # 回退
+
+        logger.info(f"日志文件根目录: {display_logs_dir}")
 
         while time.time() - start_time < max_wait_time:
             if os.path.exists(SUBSCRIBE_QUEUE):
                 try:
                     with open(SUBSCRIBE_QUEUE, 'r', encoding='utf-8') as f:
                         content = f.read()
-                        # 查找格式：UUID:::日志文件路径
                         pattern = f"{task['uuid']}:::(.*?)\n"
                         log_match = re.search(pattern, content, re.DOTALL)
-                        
+
                         if log_match:
-                            # 获取相对路径或文件名
                             log_file_rel_path = log_match.group(1).strip()
-                            
-                            # 关键修复：移除路径中可能包含的"logs/"前缀
-                            # 防止与LOGS_ABS_DIR拼接后出现重复的logs目录
-                            log_file_rel_path = re.sub(r'^logs\/', '', log_file_rel_path)
-                            
-                            # 拼接绝对路径
-                            if os.path.isabs(log_file_rel_path):
-                                log_file_path = log_file_rel_path
-                            else:
-                                log_file_path = os.path.join(LOGS_ABS_DIR, log_file_rel_path)
-                            
-                            logger.info(f"尝试读取日志文件: {log_file_path}")
-                            
-                            # 检查日志文件是否存在且非空
-                            if os.path.exists(log_file_path):
-                                if os.path.getsize(log_file_path) > 0:
-                                    with open(log_file_path, 'r', encoding='utf-8') as log_f:
+                            log_file_rel_path = re.sub(r'^logs[/\\]', '', log_file_rel_path)
+
+                            # 实际读取用绝对路径
+                            log_file_abs_path = os.path.join(LOGS_ABS_DIR, log_file_rel_path)
+                            # 显示用相对路径
+                            log_file_display_path = os.path.join(display_logs_dir, log_file_rel_path)
+
+                            logger.info(f"尝试读取日志文件: {log_file_display_path}")
+
+                            if os.path.exists(log_file_abs_path):
+                                if os.path.getsize(log_file_abs_path) > 0:
+                                    with open(log_file_abs_path, 'r', encoding='utf-8') as log_f:
                                         result_msg = log_f.read().strip()
-                                    
                                     logger.info(f"任务完成: {task['uuid']}, 成功提取结果")
                                     self.send_callback(
-                                        task['callback_url'], 
-                                        task['uuid'], 
-                                        True, 
+                                        task['callback_url'],
+                                        task['uuid'],
+                                        True,
                                         result_msg
                                     )
                                     self.remove_task(task['uuid'])
                                     return
                                 else:
-                                    logger.info(f"日志文件存在但为空: {log_file_path}，等待重试...")
+                                    logger.info(f"日志文件存在但为空: {log_file_display_path}，等待重试...")
                             else:
-                                logger.info(f"日志文件尚未生成: {log_file_path}，等待重试...")
+                                logger.info(f"日志文件尚未生成: {log_file_display_path}，等待重试...")
                 except Exception as e:
                     logger.error(f"处理订阅文件失败: {str(e)}")
                     time.sleep(check_interval)
                     continue
             time.sleep(check_interval)
 
-        # 超时处理
         logger.error(f"任务超时 {task['uuid']}")
         self.send_callback(
-            task['callback_url'], 
-            task['uuid'], 
-            False, 
+            task['callback_url'],
+            task['uuid'],
+            False,
             "任务执行超时（超过1小时）"
         )
         self.remove_task(task['uuid'])
