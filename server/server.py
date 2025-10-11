@@ -91,11 +91,31 @@ class ClusterManager:
     def __init__(self):
         self.task_queue = []  # 内存任务队列
         self.lock = threading.Lock()  # 线程安全锁
+        self.request_count = 0  # 新增：记录总请求数
+        self.start_time = time.time()  # 新增：服务启动时间戳
 
     def get_task_count(self):
         """获取任务队列中的任务数量"""
         with self.lock:
             return len(self.task_queue)
+
+    def increment_request_count(self):
+        """新增：请求计数加1（线程安全）"""
+        with self.lock:
+            self.request_count += 1
+
+    def print_hourly_stats(self):
+        """新增：打印每小时统计信息"""
+        while True:
+            time.sleep(3600)  # 每小时执行一次
+            current_time = time.time()
+            elapsed_hours = (current_time - self.start_time) / 3600
+            with self.lock:
+                logger.info(f"=== 运行统计 ===")
+                logger.info(f"当前时间: {time.strftime('%H:%M:%S')}")
+                logger.info(f"已运行时长: {elapsed_hours:.2f} 小时")
+                logger.info(f"总共处理请求数: {self.request_count}")
+                logger.info(f"================")        
 
     def get_hadoop_count(self):
         """获取当前运行的Hadoop容器组数量"""
@@ -566,6 +586,10 @@ def async_process_task(input_path, output_path, uuid_str, callback_url):
 # 初始化集群管理器并启动后台线程
 cluster_manager = ClusterManager()
 
+# 新增：启动每小时统计线程
+hourly_stats_thread = threading.Thread(target=cluster_manager.print_hourly_stats, daemon=True)
+hourly_stats_thread.start()
+
 # 启动集群监控线程
 monitor_thread = threading.Thread(target=cluster_manager.monitor_and_adjust, daemon=True)
 monitor_thread.start()
@@ -627,6 +651,9 @@ def handle_micro():
         if not data:
             data = request.form  # Compatible with form-data
         logger.info("Received /micro request data: %s" % data)
+        
+        # 新增：请求计数加1
+        cluster_manager.increment_request_count()
 
         # Validate required parameters
         required_params = ["input", "callback_url"]
@@ -677,6 +704,9 @@ def handler_hadoop():
         for param in required:
             if param not in data:
                 return f"缺少参数: {param}", 400
+            
+        # 新增：请求计数加1
+        cluster_manager.increment_request_count()
 
         uuid_str = str(uuid.uuid1())
         selected_master = None
