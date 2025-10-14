@@ -106,16 +106,17 @@ class ClusterManager:
 
     def print_hourly_stats(self):
         """新增：打印每小时统计信息"""
+        """修改：每半小时打印一次统计，已运行时长以小时为单位（保留小数）"""
         while True:
-            time.sleep(3600)  # 每小时执行一次
+            time.sleep(1800)  # 每半小时执行一次
             current_time = time.time()
+            # 计算总运行时长（小时，保留一位小数）
             elapsed_hours = (current_time - self.start_time) / 3600
             with self.lock:
                 logger.info(f"=== 运行统计 ===")
                 logger.info(f"当前时间: {time.strftime('%H:%M:%S')}")
-                logger.info(f"已运行时长: {elapsed_hours:.2f} 小时")
-                logger.info(f"总共处理请求数: {self.request_count}")
-                logger.info(f"================")        
+                logger.info(f"已运行时长: {elapsed_hours:.1f} 个小时")  # 显示0.5、1.5等格式
+                logger.info(f"总共处理请求数: {self.request_count}")        
 
     def get_hadoop_count(self):
         """获取当前运行的Hadoop容器组数量"""
@@ -240,6 +241,9 @@ class ClusterManager:
                             logger.info(f"新容器 {master} 已就绪，可分配任务")
                         else:
                             logger.warning(f"新容器 {master} 尚未就绪，需等待Hadoop启动")
+                    # 核心新增：扩容后强制更新可用容器列表
+                    self.update_available_containers()
+                    logger.info(f"扩容后可用容器列表: {self.available_containers}")
                     # 核心新增：重分配队列中未执行的任务
                     self.reassign_pending_tasks()
             except subprocess.TimeoutExpired:
@@ -290,6 +294,9 @@ class ClusterManager:
                 else:
                     logger.info(f"缩容脚本执行成功，输出: {result.stdout}")
                 time.sleep(5)
+                # 新增：缩容后强制更新可用容器列表
+                self.update_available_containers()
+                logger.info(f"缩容后可用容器列表: {self.available_containers}")
             except subprocess.TimeoutExpired:
                 logger.error(f"缩容脚本执行超时（超过5分钟）")
             except Exception as e:
@@ -348,7 +355,11 @@ class ClusterManager:
                     if result.returncode != 0:
                         logger.error(f"任务启动失败 {task['uuid']}: {result.stdout}")
                         task["status"] = "failed"
-                        self.send_callback(...)
+                        self.send_callbacktask(task['callback_url'],
+                            task['uuid'],
+                            False,
+                            "任务执行出错"
+                        )
                         self.remove_task(task['uuid'])
                         continue
 
@@ -361,7 +372,12 @@ class ClusterManager:
                 except Exception as e:
                     logger.error(f"任务处理失败 {task['uuid']}: {str(e)}")
                     task["status"] = "failed"
-                    self.send_callback(...)
+                    self.send_callback(
+                        task['callback_url'],
+                        task['uuid'],
+                        False,
+                        "任务处理失败"
+                    )
                     self.remove_task(task['uuid'])
 
             time.sleep(2)  # 降低循环频率，减少资源占用
@@ -763,7 +779,8 @@ def handler_hadoop():
         return str(e), 500
 
 if __name__ == "__main__":
-    logger.info("Starting MLU inference server...")
+    logger.info("Starting proxy server...")
+    # logger.info("Starting MLU inference server...")
     app.run(
         debug=False,
         threaded=True,
