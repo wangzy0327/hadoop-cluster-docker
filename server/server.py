@@ -93,16 +93,28 @@ class ClusterManager:
         self.lock = threading.Lock()  # 线程安全锁
         self.request_count = 0  # 新增：记录总请求数
         self.start_time = time.time()  # 新增：服务启动时间戳
+        # IP请求计数字典，key=客户端IP，value=请求次数
+        self.ip_request_count = {}  # 格式示例：{"192.168.1.100": 5, "10.0.0.5": 3}
 
     def get_task_count(self):
         """获取任务队列中的任务数量"""
         with self.lock:
             return len(self.task_queue)
 
-    def increment_request_count(self):
-        """新增：请求计数加1（线程安全）"""
+    # def increment_request_count(self):
+    #     """新增：请求计数加1（线程安全）"""
+    #     with self.lock:
+    #         self.request_count += 1
+            
+    def increment_ip_request_count(self, client_ip):
+        """新增：按客户端IP累加请求计数（线程安全）"""
         with self.lock:
             self.request_count += 1
+            # 若IP已存在则计数+1，不存在则初始化为1
+            if client_ip in self.ip_request_count:
+                self.ip_request_count[client_ip] += 1
+            else:
+                self.ip_request_count[client_ip] = 1            
 
     def print_hourly_stats(self):
         """新增：打印每小时统计信息"""
@@ -116,8 +128,15 @@ class ClusterManager:
                 logger.info(f"=== 运行统计 ===")
                 logger.info(f"当前时间: {time.strftime('%H:%M:%S')}")
                 logger.info(f"已运行时长: {elapsed_hours:.1f} 个小时")  # 显示0.5、1.5等格式
-                logger.info(f"总共处理请求数: {self.request_count}")        
-                logger.info(f"正常处理请求数: {self.request_count}")        
+                logger.info(f"累积处理请求数: {self.request_count}")  
+                logger.info(f"各客户端IP请求明细:")
+                # 遍历IP计数字典，打印每个IP的请求量
+                if self.ip_request_count:
+                    for ip, count in self.ip_request_count.items():
+                        logger.info(f"  {ip}: {count} 次请求")
+                else:
+                    logger.info(f"  暂无客户端请求")      
+                # logger.info(f"正常处理请求数: {self.request_count}")        
 
     def get_hadoop_count(self):
         """获取当前运行的Hadoop容器组数量"""
@@ -318,7 +337,7 @@ class ClusterManager:
         while True:
             task_count = self.get_task_count()
             current_groups = self.get_hadoop_count()
-            #logger.info(f"当前任务数: {task_count}, 当前容器组数: {current_groups}")
+            logger.info(f"当前任务数: {task_count}, 当前容器组数: {current_groups}")
 
             # 扩容策略
             if task_count > current_groups:
@@ -708,9 +727,11 @@ def handle_micro():
         if not data:
             data = request.form  # Compatible with form-data
         logger.info("Received /micro request data: %s" % data)
+        client_ip = request.remote_addr  # 获取客户端IP
         
         # 新增：请求计数加1
-        cluster_manager.increment_request_count()
+        # cluster_manager.increment_request_count()
+        cluster_manager.increment_ip_request_count()
 
         # Validate required parameters
         required_params = ["input", "callback_url"]
@@ -763,6 +784,7 @@ def handler_hadoop():
     try:
         data = request.get_json()
         logger.info(f"Received /hadoop request: {data}")
+        client_ip = request.remote_addr  # 获取客户端IP
 
         required = ["input", "output", "callback_url"]
         for param in required:
@@ -770,7 +792,8 @@ def handler_hadoop():
                 return f"缺少参数: {param}", 400
             
         # 新增：请求计数加1
-        cluster_manager.increment_request_count()
+        # cluster_manager.increment_request_count()
+        cluster_manager.increment_ip_request_count(client_ip)  # IP请求数+1
 
         uuid_str = str(uuid.uuid1())
         selected_master = None
