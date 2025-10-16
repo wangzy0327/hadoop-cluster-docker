@@ -117,6 +117,7 @@ class ClusterManager:
                 logger.info(f"当前时间: {time.strftime('%H:%M:%S')}")
                 logger.info(f"已运行时长: {elapsed_hours:.1f} 个小时")  # 显示0.5、1.5等格式
                 logger.info(f"总共处理请求数: {self.request_count}")        
+                logger.info(f"正常处理请求数: {self.request_count}")        
 
     def get_hadoop_count(self):
         """获取当前运行的Hadoop容器组数量"""
@@ -317,7 +318,7 @@ class ClusterManager:
         while True:
             task_count = self.get_task_count()
             current_groups = self.get_hadoop_count()
-            logger.info(f"当前任务数: {task_count}, 当前容器组数: {current_groups}")
+            #logger.info(f"当前任务数: {task_count}, 当前容器组数: {current_groups}")
 
             # 扩容策略
             if task_count > current_groups:
@@ -355,7 +356,7 @@ class ClusterManager:
                     if result.returncode != 0:
                         logger.error(f"任务启动失败 {task['uuid']}: {result.stdout}")
                         task["status"] = "failed"
-                        self.send_callbacktask(task['callback_url'],
+                        self.send_callback(task['callback_url'],
                             task['uuid'],
                             False,
                             "任务执行出错"
@@ -509,16 +510,70 @@ def parse_shell(shcmd):
             logger.info("Command executed successfully, return code: %s" % p.returncode)
 
         # Extract model information
-        pattern = r"(I\d{4} \d{2}:\d{2}:\d{2}\.\d{6} +\d+ caffe\.cpp:495\] execution time: .*? us)"
-        match = re.search(pattern, combined, re.DOTALL | re.IGNORECASE)
+        # pattern = r"(I\d{4} \d{2}:\d{2}:\d{2}\.\d{6} +\d+ caffe\.cpp:495\] execution time: .*? us)"
+        # match = re.search(pattern, combined, re.DOTALL | re.IGNORECASE)
 
-        if match:
-            model_info = match.group(0).strip()
-            logger.info("Extracted model info: %s" % model_info)
-            return True, model_info
-        else:
-            logger.warning("No execution time found, returning full output")
-            return True, combined
+        # if match:
+        #     model_info = match.group(0).strip()
+        #     logger.info("Extracted model info: %s" % model_info)
+        #     return True, model_info
+        # else:
+        #     logger.warning("No execution time found, returning full output")
+        #     return True, combined
+        # 【核心修改：根据命令内容判断任务类型，针对性解析】
+        parsed_result = ""
+        if "yolov3_416" in shcmd:
+            # -------------------------- yolov3 输出解析 --------------------------
+            # 修复正则表达式，使其能正确匹配实际输出格式
+            patterns_yolov3 = [
+                # 匹配 yolov3_detection() 执行时间，支持科学计数法
+                (r"yolov3_detection\(\) execution time: (.*? us)", "Execution Time"),
+                # 匹配 Hardware fps: 后面的数字，包括浮点数
+                (r"Hardware fps: ([\d.]+)", "Hardware FPS"),
+                # 匹配 End2end throughput fps: 后面的数字
+                (r"End2end throughput fps: ([\d.]+)", "End2end FPS"),
+                # 匹配 Using MLU device 后面的数字
+                (r"Using MLU device (\d+)", "MLU Device")
+            ]
+            parsed_result = "=== YOLOv3 Task Result ===\n"
+            for pattern, label in patterns_yolov3:
+                match = re.search(pattern, combined, re.DOTALL | re.IGNORECASE)
+                if match:
+                    parsed_result += f"{label}: {match.group(1).strip()}\n"
+                else:
+                    parsed_result += f"{label}: Not Found\n"
+
+        elif "classification" in shcmd:
+            # -------------------------- Classification 输出解析 --------------------------
+            # 修复正则表达式，使其能正确匹配实际输出格式
+            patterns_cls = [
+                # 匹配 accuracy1: 后面的数字，包括括号内的内容
+                (r"accuracy1: ([\d.]+)", "Accuracy@1"),
+                # 匹配 accuracy5: 后面的数字
+                (r"accuracy5: ([\d.]+)", "Accuracy@5"),
+                # 匹配 Total execution time: 后面的时间
+                (r"Total execution time: (.*? us)", "Total Execution Time"),
+                # 匹配 Hardware fps: 后面的数字
+                (r"Hardware fps: ([\d.]+)", "Hardware FPS"),
+                # 匹配 End2end throughput fps: 后面的数字
+                (r"End2end throughput fps: ([\d.]+)", "End2end FPS"),
+                # 匹配 Using MLU device 后面的数字
+                (r"Using MLU device (\d+)", "MLU Device")
+            ]
+            parsed_result = "=== Classification Task Result ===\n"
+            for pattern, label in patterns_cls:
+                match = re.search(pattern, combined, re.DOTALL | re.IGNORECASE)
+                if match:
+                    parsed_result += f"{label}: {match.group(1).strip()}\n"
+                else:
+                    parsed_result += f"{label}: Not Found\n"
+
+        # 若未匹配到任何任务类型，返回原始输出
+        if not parsed_result:
+            parsed_result = f"Command executed successfully. Raw output:\n{combined_output}"
+
+        logger.info(f"Parsed result:\n{parsed_result}")
+        return True, parsed_result
 
     except subprocess.TimeoutExpired:
         p.kill()
@@ -534,67 +589,53 @@ def parse_shell(shcmd):
         return False, error_msg
 
 
-def async_process_task(input_path, output_path, uuid_str, callback_url):
+def async_process_task(input_task, output_path, uuid_str, callback_url):
     """Process task asynchronously"""
     try:
-        logger.info("[Async Task] Starting processing UUID: %s" % uuid_str)
-        logger.info("[Async Task] Input path: %s, Output path: %s" % (input_path, output_path))
+        logger.info("[Async Task] Starting processing UUID: %s, task_type: %s" % (uuid_str, input_task))
+        # logger.info("[Async Task] Input path: %s, Output path: %s" % (input_path, output_path))
 
         # Execute inference command
-        inference_cmd = "cd /opt/cambricon/caffe/src/caffe && bash gen_offline_model.sh"
-        success, result_output = parse_shell(inference_cmd)
-        
-        # Build task result
-        task_result = {
-            "status": "success" if success else "failed",
-            "cmd": inference_cmd,
-            "output": result_output,
-            "input_path": input_path,
-            "output_path": output_path,
-            "execution_time": time.strftime("%H:%M:%S")  # 时间格式改为时分秒
-        }
-
-        # Callback to client
-        if callback_url:
-            logger.info("[Async Task] Calling back client: %s" % callback_url)
-            callback_data = {
-                "uuid": uuid_str,
-                "task_status": task_result["status"],
-                "result": task_result
-            }
-
-            response = requests.post(
-                url=callback_url,
-                json=callback_data,
-                headers={"Content-Type": "application/json"},
-                timeout=10
-            )
-            response.raise_for_status()
-            logger.info("[Async Task] Callback completed, status code: %s, response: %s" % (response.status_code, response.text))
+        # 【核心修改1：根据 task_type 动态生成 Docker 命令】
+        if input_task == "yolov3":
+            # yolov3 任务命令
+            docker_cmd = "docker exec mlx_camb_test10 bash -c 'cd  /cambricon/v8.2_arm/ && source env.sh && cd /cambricon/v8.2_arm/arm64/yolov3_416 && bash run_fp16.sh'"
+        elif input_task == "classification":
+            # classification 任务命令
+            docker_cmd = "docker exec mlx_camb_test10 bash -c 'cd  /cambricon/v8.2_arm/ && source env.sh && cd /cambricon/v8.2_arm/arm64/classification && bash run_fp16.sh'"
         else:
-            logger.warning("[Async Task] No callback URL provided, skipping callback")
+            raise ValueError(f"Unsupported task_type: {input_task}")
+        
+        # inference_cmd = "cd /opt/cambricon/caffe/src/caffe && bash gen_offline_model.sh"
+        success, result_output = parse_shell(docker_cmd)
+        
+        # Build task result (保留原结构，新增 task_type 字段)
+        # 3. 【核心修改：复用cluster_manager.send_callback()，与hadoop回调格式统一】
+        # 构造与hadoop一致的message内容（包含任务类型、命令、解析结果）
+        message = f"Task Type: {input_task}\n" \
+                  f"Executed Command: {docker_cmd}\n" \
+                  f"Execution Time: {time.strftime('%H:%M:%S')}\n" \
+                  f"Parsed Result:\n{result_output}"
+        
+        # 调用hadoop路由的回调方法，确保数据结构一致
+        cluster_manager.send_callback(
+            url=callback_url,
+            uuid=uuid_str,
+            success=success,
+            message=message  # 解析结果放入message字段
+        )
 
-    except requests.exceptions.RequestException as e:
-        error_msg = f"Callback request failed: {str(e)}"
-        logger.error(error_msg)
     except Exception as e:
-        error_msg = "Task processing error: %s" % str(e)
+        error_msg = f"Task processing error: {str(e)}\nTraceback: {traceback.format_exc()}"
         logger.error(error_msg)
-        logger.error("Traceback: %s" % traceback.format_exc())
+        # 异常时也通过send_callback发送错误信息
         if callback_url:
-            try:
-                requests.post(
-                    url=callback_url,
-                    json={
-                        "uuid": uuid_str,
-                        "task_status": "error",
-                        "error_msg": error_msg
-                    },
-                    headers={"Content-Type": "application/json"},
-                    timeout=10
-                )
-            except Exception as ce:
-                logger.error("Failed to send error callback: %s" % str(ce))
+            cluster_manager.send_callback(
+                url=callback_url,
+                uuid=uuid_str,
+                success=False,
+                message=error_msg
+            )
     finally:
         logger.info("[Async Task] Processing finished UUID: %s" % uuid_str)
 
@@ -679,9 +720,16 @@ def handle_micro():
                 logger.error(error_msg)
                 return error_msg, 400
 
-        input_path = data["input"]
+        input_task = data["input"]
         output_path = data.get("output", "")
         callback_url = data["callback_url"]
+        # task_type = data["task_type"]  # 取值：yolov3 或 classification
+        
+        # 【核心修改2：校验 input_task 合法性】
+        if input_task not in ["yolov3", "classification"]:
+            error_msg = f"Invalid task_type: {input_task}. Must be 'yolov3' or 'classification'"
+            logger.error(error_msg)
+            return error_msg, 400
 
         # Generate UUID
         uuid_str = str(uuid.uuid1())
@@ -690,10 +738,10 @@ def handle_micro():
         # Submit async task
         executor.submit(
             async_process_task,
-            input_path,
+            input_task,
             output_path,
             uuid_str,
-            callback_url
+            callback_url,
         )
 
         return uuid_str
@@ -787,4 +835,5 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=8800
     )
+
 
