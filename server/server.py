@@ -297,30 +297,31 @@ class ClusterManager:
             return
 
         logger.info(f"任务列表为空，执行缩容集群: {current_num} -> {target_num}")
-        if target_num < current_num:
-            logger.info(f"缩容集群: {current_num} -> {target_num}")
-            try:
-                # 使用universal_newlines替代text参数
-                result = subprocess.run(
-                    f"bash /home/wzy/hadoop-cluster-docker/reduce-container.sh {target_num}",
-                    shell=True,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    universal_newlines='utf-8', # 显式指定解码编码为 UTF-8，匹配脚本输出
-                    timeout=300
-                )
-                if result.returncode != 0:
-                    logger.error(f"缩容脚本执行失败，退出码: {result.returncode}, 输出: {result.stdout}")
-                else:
-                    logger.info(f"缩容脚本执行成功，输出: {result.stdout}")
-                time.sleep(5)
-                # 新增：缩容后强制更新可用容器列表
-                self.update_available_containers()
-                logger.info(f"缩容后可用容器列表: {self.available_containers}")
-            except subprocess.TimeoutExpired:
-                logger.error(f"缩容脚本执行超时（超过5分钟）")
-            except Exception as e:
-                logger.error(f"缩容集群失败: {str(e)}")
+        with self.lock:
+            if target_num < current_num:
+                logger.info(f"缩容集群: {current_num} -> {target_num}")
+                try:
+                    # 使用universal_newlines替代text参数
+                    result = subprocess.run(
+                        f"bash /home/wzy/hadoop-cluster-docker/reduce-container.sh {target_num}",
+                        shell=True,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT,
+                        universal_newlines='utf-8', # 显式指定解码编码为 UTF-8，匹配脚本输出
+                        timeout=300
+                    )
+                    if result.returncode != 0:
+                        logger.error(f"缩容脚本执行失败，退出码: {result.returncode}, 输出: {result.stdout}")
+                    else:
+                        logger.info(f"缩容脚本执行成功，输出: {result.stdout}")
+                    time.sleep(5)
+                    # 新增：缩容后强制更新可用容器列表
+                    self.update_available_containers()
+                    logger.info(f"缩容后可用容器列表: {self.available_containers}")
+                except subprocess.TimeoutExpired:
+                    logger.error(f"缩容脚本执行超时（超过5分钟）")
+                except Exception as e:
+                    logger.error(f"缩容集群失败: {str(e)}")
 
     def add_task(self, task):
         """添加任务到队列"""
@@ -359,46 +360,46 @@ class ClusterManager:
                 for task in pending_tasks:
                     task["status"] = "running"
 
-            for task in pending_tasks:
-                try:
-                    # 1. 启动任务（后台执行）
-                    cmd = f"docker exec -d {task['container']} bash -c '{task['command']}'"
-                    logger.info(f"执行任务: {cmd}")
-                    result = subprocess.run(
-                        cmd,
-                        shell=True,
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.STDOUT,
-                        universal_newlines=True,
-                        timeout=60
-                    )
-                    if result.returncode != 0:
-                        logger.error(f"任务启动失败 {task['uuid']}: {result.stdout}")
+                for task in pending_tasks:
+                    try:
+                        # 1. 启动任务（后台执行）
+                        cmd = f"docker exec -d {task['container']} bash -c '{task['command']}'"
+                        logger.info(f"执行任务: {cmd}")
+                        result = subprocess.run(
+                            cmd,
+                            shell=True,
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT,
+                            universal_newlines=True,
+                            timeout=60
+                        )
+                        if result.returncode != 0:
+                            logger.error(f"任务启动失败 {task['uuid']}: {result.stdout}")
+                            task["status"] = "failed"
+                            self.send_callback(task['callback_url'],
+                                task['uuid'],
+                                False,
+                                "任务执行出错"
+                            )
+                            self.remove_task(task['uuid'])
+                            continue
+
+                        # 2. 关键修复：用线程池并行监控任务完成（非阻塞）
+                        executor.submit(
+                            self.monitor_task_completion,  # 提交监控逻辑到线程池
+                            task
+                        )
+
+                    except Exception as e:
+                        logger.error(f"任务处理失败 {task['uuid']}: {str(e)}")
                         task["status"] = "failed"
-                        self.send_callback(task['callback_url'],
+                        self.send_callback(
+                            task['callback_url'],
                             task['uuid'],
                             False,
-                            "任务执行出错"
+                            "任务处理失败"
                         )
                         self.remove_task(task['uuid'])
-                        continue
-
-                    # 2. 关键修复：用线程池并行监控任务完成（非阻塞）
-                    executor.submit(
-                        self.monitor_task_completion,  # 提交监控逻辑到线程池
-                        task
-                    )
-
-                except Exception as e:
-                    logger.error(f"任务处理失败 {task['uuid']}: {str(e)}")
-                    task["status"] = "failed"
-                    self.send_callback(
-                        task['callback_url'],
-                        task['uuid'],
-                        False,
-                        "任务处理失败"
-                    )
-                    self.remove_task(task['uuid'])
 
             time.sleep(2)  # 降低循环频率，减少资源占用
 
@@ -488,7 +489,7 @@ class ClusterManager:
                     "timestamp": time.strftime("%H:%M:%S")
                 }
                 response = requests.post(
-                    url,
+                    url,    
                     json=data,
                     headers={"Content-Type": "application/json"},
                     timeout=10  # 单次请求超时10秒
@@ -800,6 +801,39 @@ def handler_hadoop():
         retry_count = 0
         max_retry = 5  # 增加重试次数
         retry_interval = 5
+        
+        #根据input参数映射对应脚本
+        input_param = data["input"].strip().lower()  # 统一转为小写，避免大小写问题
+        # 应用类型-脚本映射字典
+        app_script_map = {
+            "grep": "run-grep.sh",
+            "pi": "run-pi.sh",
+            "randomwriter": "run-teragen.sh",
+            "sort": "run-sort3.sh",
+            "wordmean": "run-wordmean.sh",
+            "wordmedian": "run-wordmedian.sh"
+        }
+        
+        input_map = {
+            "grep":"input/input-grep1",
+            "pi":"input/input-pi1",
+            "randomwriter":"input/input-teragen1",
+            "sort":"local-text-data input/input-sort2",
+            "wordmean":"input/input2",
+            "wordmedian":"input/input3",
+            "wordcount":"input/input1",
+        }
+        
+        # 匹配脚本：优先映射，未匹配或为wordcount则用默认脚本
+        if input_param in app_script_map:
+            script_name = app_script_map[input_param]
+        else:
+            script_name = "run-wordcount2.sh"  # 包含wordcount和其他未匹配情况
+            
+        if input_param in input_map:
+            input_name = input_map[input_param]
+        else:
+            input_name = "input/input2"            
 
         while retry_count < max_retry and not selected_master:
             try:
@@ -838,7 +872,7 @@ def handler_hadoop():
         # 添加任务到队列
         cluster_manager.add_task({
             "uuid": uuid_str,
-            "command": f"sh /root/run-wordcount2.sh {data['input']} {data['output']} {uuid_str}",
+            "command": f"bash /root/{script_name} {input_name} {data['output']} {uuid_str}",
             "container": selected_master,  # 绑定到新选择的容器
             "callback_url": data["callback_url"],
             "timestamp": time.time()
