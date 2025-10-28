@@ -40,6 +40,12 @@ do
                 -v /home/wzy/hadoop-cluster-docker/input:/root/input \
                 -v /home/wzy/hadoop-cluster-docker/output:/root/output \
                 -v /home/wzy/hadoop-cluster-docker/run-wordcount2.sh:/root/run-wordcount2.sh \
+		-v /home/wzy/hadoop-cluster-docker/run-grep.sh:/root/run-grep.sh \
+                -v /home/wzy/hadoop-cluster-docker/run-pi.sh:/root/run-pi.sh \
+                -v /home/wzy/hadoop-cluster-docker/run-teragen.sh:/root/run-teragen.sh \
+                -v /home/wzy/hadoop-cluster-docker/run-sort3.sh:/root/run-sort3.sh \
+                -v /home/wzy/hadoop-cluster-docker/run-wordmean.sh:/root/run-wordmean.sh \
+                -v /home/wzy/hadoop-cluster-docker/run-wordmedian.sh:/root/run-wordmedian.sh \
                 -v /home/wzy/hadoop-cluster-docker/publish:/root/publish \
                 -v /home/wzy/hadoop-cluster-docker/subscribe:/root/subscribe \
 		-v /home/wzy/hadoop-cluster-docker/logs:/root/logs \
