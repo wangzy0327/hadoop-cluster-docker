@@ -16,6 +16,31 @@ LOG_DIR="logs"
 mkdir -p "$LOG_DIR"
 LOG_FILE="$LOG_DIR/$UUID.txt"
 LOCAL_RESULT="./sort-results/$UUID/sorted-text.txt"
+
+
+# =================== 关键修改：自定义日志格式（仅保留时:分:秒） ===================
+# 创建临时 log4j 配置文件
+LOG4J_CONF="hadoop-log4j.conf"
+cat > "$LOG4J_CONF" << 'EOF'
+# 设置根日志器，输出到控制台
+log4j.rootLogger=INFO, console
+
+# 定义控制台输出器
+log4j.appender.console=org.apache.log4j.ConsoleAppender
+log4j.appender.console.target=System.err
+log4j.appender.console.layout=org.apache.log4j.PatternLayout
+
+# 关键：仅输出 时间(时:分:秒) + 日志级别 + 消息
+# %d{HH:mm:ss} 表示只输出 时:分:秒
+# %p 是日志级别 (INFO, WARN, ERROR)
+# %m 是消息内容
+# %n 是换行
+log4j.appender.console.layout.ConversionPattern=%d{HH:mm:ss} %p %m%n
+EOF
+
+# 关键：全局设置HADOOP_OPTS，覆盖所有Hadoop命令的log4j配置
+export HADOOP_OPTS="-Dlog4j.configuration=file:./$LOG4J_CONF"
+
 mkdir -p "$(dirname "$LOCAL_RESULT")"
 
 # 定义队列路径（与server.py保持一致）
@@ -128,3 +153,4 @@ echo -e "\n结果已保存到: $LOG_FILE"
 echo "-------------------- 结束 --------------------"
 
 exit $SORT_EXIT_CODE
+
