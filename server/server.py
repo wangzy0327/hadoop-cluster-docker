@@ -297,31 +297,55 @@ class ClusterManager:
             return
 
         logger.info(f"任务列表为空，执行缩容集群: {current_num} -> {target_num}")
-        with self.lock:
-            if target_num < current_num:
-                logger.info(f"缩容集群: {current_num} -> {target_num}")
-                try:
-                    # 使用universal_newlines替代text参数
-                    result = subprocess.run(
-                        f"bash /home/wzy/hadoop-cluster-docker/reduce-container.sh {target_num}",
-                        shell=True,
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.STDOUT,
-                        universal_newlines='utf-8', # 显式指定解码编码为 UTF-8，匹配脚本输出
-                        timeout=300
-                    )
-                    if result.returncode != 0:
-                        logger.error(f"缩容脚本执行失败，退出码: {result.returncode}, 输出: {result.stdout}")
-                    else:
-                        logger.info(f"缩容脚本执行成功，输出: {result.stdout}")
-                    time.sleep(5)
-                    # 新增：缩容后强制更新可用容器列表
-                    self.update_available_containers()
-                    logger.info(f"缩容后可用容器列表: {self.available_containers}")
-                except subprocess.TimeoutExpired:
-                    logger.error(f"缩容脚本执行超时（超过5分钟）")
-                except Exception as e:
-                    logger.error(f"缩容集群失败: {str(e)}")
+        if target_num < current_num:
+            logger.info(f"缩容集群: {current_num} -> {target_num}")
+            try:
+                # 使用universal_newlines替代text参数
+                result = subprocess.run(
+                    f"bash /home/wzy/hadoop-cluster-docker/reduce-container.sh {target_num}",
+                    shell=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    universal_newlines='utf-8', # 显式指定解码编码为 UTF-8，匹配脚本输出
+                    timeout=300
+                )
+                if result.returncode != 0:
+                    logger.error(f"缩容脚本执行失败，退出码: {result.returncode}, 输出: {result.stdout}")
+                else:
+                    logger.info(f"缩容脚本执行成功，输出: {result.stdout}")
+                time.sleep(5)
+                # 新增：缩容后强制更新可用容器列表
+                self.update_available_containers()
+                logger.info(f"缩容后可用容器列表: {self.available_containers}")
+            except subprocess.TimeoutExpired:
+                logger.error(f"缩容脚本执行超时（超过5分钟）")
+            except Exception as e:
+                logger.error(f"缩容集群失败: {str(e)}")
+        # with self.lock:
+        #     if target_num < current_num:
+        #         logger.info(f"缩容集群: {current_num} -> {target_num}")
+        #         try:
+        #             # 使用universal_newlines替代text参数
+        #             result = subprocess.run(
+        #                 f"bash /home/wzy/hadoop-cluster-docker/reduce-container.sh {target_num}",
+        #                 shell=True,
+        #                 stdout=subprocess.PIPE,
+        #                 stderr=subprocess.STDOUT,
+        #                 universal_newlines='utf-8', # 显式指定解码编码为 UTF-8，匹配脚本输出
+        #                 timeout=300
+        #             )
+        #             if result.returncode != 0:
+        #                 logger.error(f"缩容脚本执行失败，退出码: {result.returncode}, 输出: {result.stdout}")
+        #             else:
+        #                 logger.info(f"缩容脚本执行成功，输出: {result.stdout}")
+        #             time.sleep(5)
+        #             # 新增：缩容后强制更新可用容器列表
+        #             self.update_available_containers()
+        #             logger.info(f"缩容后可用容器列表: {self.available_containers}")
+        #         except subprocess.TimeoutExpired:
+        #             logger.error(f"缩容脚本执行超时（超过5分钟）")
+        #         except Exception as e:
+        #             logger.error(f"缩容集群失败: {str(e)}")
 
     def add_task(self, task):
         """添加任务到队列"""
@@ -375,8 +399,8 @@ class ClusterManager:
                         )
                         if result.returncode != 0:
                             logger.error(f"任务启动失败 {task['uuid']}: {result.stdout}")
-                            task["status"] = "failed"
-                            self.send_callback(task['callback_url'],
+                            self.send_callback(
+                                task['callback_url'],
                                 task['uuid'],
                                 False,
                                 "任务执行出错"
@@ -400,6 +424,47 @@ class ClusterManager:
                             "任务处理失败"
                         )
                         self.remove_task(task['uuid'])
+                    
+                # for task in pending_tasks:
+                #     try:
+                #         # 1. 启动任务（后台执行）
+                #         cmd = f"docker exec -d {task['container']} bash -c '{task['command']}'"
+                #         logger.info(f"执行任务: {cmd}")
+                #         result = subprocess.run(
+                #             cmd,
+                #             shell=True,
+                #             stdout=subprocess.PIPE,
+                #             stderr=subprocess.STDOUT,
+                #             universal_newlines=True,
+                #             timeout=60
+                #         )
+                #         if result.returncode != 0:
+                #             logger.error(f"任务启动失败 {task['uuid']}: {result.stdout}")
+                #             task["status"] = "failed"
+                #             self.send_callback(task['callback_url'],
+                #                 task['uuid'],
+                #                 False,
+                #                 "任务执行出错"
+                #             )
+                #             self.remove_task(task['uuid'])
+                #             continue
+
+                #         # 2. 关键修复：用线程池并行监控任务完成（非阻塞）
+                #         executor.submit(
+                #             self.monitor_task_completion,  # 提交监控逻辑到线程池
+                #             task
+                #         )
+
+                #     except Exception as e:
+                #         logger.error(f"任务处理失败 {task['uuid']}: {str(e)}")
+                #         task["status"] = "failed"
+                #         self.send_callback(
+                #             task['callback_url'],
+                #             task['uuid'],
+                #             False,
+                #             "任务处理失败"
+                #         )
+                #         self.remove_task(task['uuid'])
 
             time.sleep(2)  # 降低循环频率，减少资源占用
 
