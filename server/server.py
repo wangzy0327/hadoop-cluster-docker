@@ -790,6 +790,7 @@ def handle_micro():
         # Log request details
         logger.info("Received /micro request, headers: %s" % request.headers)
         data = request.get_json()
+        client_ip = request.remote_addr  # 获取客户端IP
         if not data:
             data = request.form  # Compatible with form-data
         logger.info("Received /micro request data: %s" % data)
@@ -797,7 +798,7 @@ def handle_micro():
         
         # 新增：请求计数加1
         # cluster_manager.increment_request_count()
-        cluster_manager.increment_ip_request_count()
+        cluster_manager.increment_ip_request_count(client_ip)  # IP请求数+1
 
         # Validate required parameters
         required_params = ["input", "callback_url"]
