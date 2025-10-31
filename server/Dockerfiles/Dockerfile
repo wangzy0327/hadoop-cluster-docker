@@ -10,10 +10,18 @@ RUN apt-get update && \
         python3-pip \
         python3-setuptools \
         python3-wheel \
-        curl && \
+        curl  \
+        locales fonts-wqy-zenhei vim && \
+    echo "en_US.UTF-8 UTF-8" >> /etc/locale.gen && \
+    echo "zh_CN.UTF-8 UTF-8" >> /etc/locale.gen && \
+    locale-gen && \
+    update-locale LANG=zh_CN.utf8 LC_ALL=zh_CN.utf8 && \
     # 升级 pip 到最新支持版本（可选）
     python3 -m pip install --upgrade "pip >= 20.3,< 22.0" && \
     # 安装 flask
     pip3 install --default-timeout=100 "flask<2" requests==2.25.1 && \
     # 清理缓存以减小镜像体积
     rm -rf /var/lib/apt/lists/*
+
+ENV LANG=zh_CN.utf8
+ENV LC_ALL=zh_CN.utf8

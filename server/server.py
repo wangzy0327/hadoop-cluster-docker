@@ -684,10 +684,10 @@ def async_process_task(input_task, output_path, uuid_str, callback_url):
         # 【核心修改1：根据 task_type 动态生成 Docker 命令】
         if input_task == "yolov3":
             # yolov3 任务命令
-            docker_cmd = "docker exec mlx_camb_test10 bash -c 'cd  /cambricon/v8.2_arm/ && source env.sh && cd /cambricon/v8.2_arm/arm64/yolov3_416 && bash run_fp16.sh'"
+            docker_cmd = "docker exec camb_test bash -c 'cd  /cambricon/v8.2_arm/ && source env.sh && cd /cambricon/v8.2_arm/arm64/yolov3_416 && bash run_fp16.sh'"
         elif input_task == "classification":
             # classification 任务命令
-            docker_cmd = "docker exec mlx_camb_test10 bash -c 'cd  /cambricon/v8.2_arm/ && source env.sh && cd /cambricon/v8.2_arm/arm64/classification && bash run_fp16.sh'"
+            docker_cmd = "docker exec camb_test bash -c 'cd  /cambricon/v8.2_arm/ && source env.sh && cd /cambricon/v8.2_arm/arm64/classification && bash run_fp16.sh'"
         else:
             raise ValueError(f"Unsupported task_type: {input_task}")
         
