@@ -1,1 +1,1 @@
-sudo docker run -dit --name="pl-server-hadoop" -p 8800:8800 --privileged -v /var/run/docker.sock:/var/run/docker.sock  -v /usr/bin/docker:/usr/bin/docker  -v /home/wzy/hadoop-cluster-docker:/home/wzy/hadoop-cluster-docker  plserver_ubuntu:hadoop  /bin/bash  
+sudo docker run -dit --name="pl-server-hadoop" -p 8800:8800 --privileged -v /var/run/docker.sock:/var/run/docker.sock  -v /usr/bin/docker:/usr/bin/docker  -v /home/wzy/hadoop-cluster-docker:root/hadoop-cluster-docker  plserver_ubuntu:hadoop  /bin/bash  
