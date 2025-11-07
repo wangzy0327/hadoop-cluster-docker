@@ -73,6 +73,50 @@ CHECK_INTERVAL = 10
 executor = ThreadPoolExecutor(max_workers=10)
 
 
+"""
+缩容黑名单：
+    缩容开始时将待删除容器加入shrinking_containers集合
+    可用容器列表更新时自动过滤黑名单容器
+    缩容完成后从黑名单中移除容器
+二次校验与重分配：
+    任务执行前检查容器是否在黑名单或已失效
+    若容器失效，通过reassign_task方法重新分配到可用容器
+    重分配逻辑确保任务状态正确更新，避免重复执行
+缩容原子性：通过shrink_lock确保同一时间只有一个缩容操作执行，避免黑名单混乱
+
+核心改进点
+1、强化 monitor_and_adjust 线程稳定性：
+    确保 while True 循环中无论是否发生异常，都会通过 finally 块执行 time.sleep(CHECK_INTERVAL) 并继续循环
+    心跳日志 [monitor心跳] 强制每 10 秒输出一次，即使在空闲或异常后也能持续打印
+2、优化异常处理：
+    所有关键操作（锁获取、容器检查、脚本执行）都添加了异常捕获和日志输出
+    避免单一操作异常导致整个线程终止
+3、锁操作超时控制：
+    所有锁获取都添加 timeout 参数，避免线程无限期阻塞在锁等待上
+    超时后输出明确日志，便于问题定位
+
+核心问题定位:
+
+1、容器锁竞争导致超时:原因是多个线程（如扩容后的任务重分配线程、新任务请求的容器列表更新线程、monitor 监控线程）同时竞争 container_lock，导致部分线程获取锁超时，进而影响后续容器操作的流畅性
+2、容器检查操作耗时过长:原因是多个线程（如扩容后的任务重分配线程、新任务请求的容器列表更新线程、monitor 监控线程）同时竞争 container_lock，导致部分线程获取锁超时，进而影响后续容器操作的流畅性
+3、任务队列处理与锁操作重叠:新任务请求（如 01:25:39 的 /hadoop 请求）会触发 update_available_containers，与 monitor 线程、任务重分配线程的锁操作重叠，进一步提高锁竞争概率
+
+解决思路：
+    
+1. 优化锁机制：减少锁持有时间
+核心思路是将耗时的容器检查操作移出锁保护范围，仅在读写共享变量（available_containers）时持有锁
+
+2. 优化容器检查逻辑：减少重复检查
+在短时间内避免重复执行容器可用性检查，通过缓存机制减少 Docker 命令调用，新增缓存相关变量和逻辑
+
+3. 限制并发更新：避免频繁触发容器列表更新
+在新任务请求处理逻辑中，避免每次都触发 update_available_containers，改为定期更新或按需更新
+
+4. 增加锁操作的日志细化：便于定位阻塞点
+在所有锁操作前后添加更详细的日志，明确锁竞争的具体线程和时间点
+    
+"""
+
 class ClusterManager:
     """Hadoop集群动态扩缩容管理器"""
     def __init__(self):
@@ -88,14 +132,22 @@ class ClusterManager:
         self.available_containers = ["hadoop-master-0"]
         self.shrinking_containers = set()
         self.shrink_lock = threading.Lock()
+        self.container_status_cache = {}  # 容器状态缓存 {容器名: (状态, 缓存时间)}
+        self.cache_expire = 30  # 缓存过期时间(30秒)
+        self.last_container_update = 0  # 上次容器列表更新时间戳
 
     def get_task_count(self):
         try:
+            logger.info("获取任务数 - 准备获取任务锁")
             if self.task_lock.acquire(timeout=2):
                 try:
-                    return len(self.task_queue)
+                    logger.info("获取任务数 - 成功获取任务锁")
+                    task_count = len(self.task_queue)
+                    logger.info(f"获取任务数 - 当前任务数: {task_count}")
+                    return task_count
                 finally:
                     self.task_lock.release()
+                    logger.info("获取任务数 - 已释放任务锁")
             else:
                 logger.error("获取任务队列锁超时，返回任务数0")
                 return 0
@@ -105,12 +157,16 @@ class ClusterManager:
             
     def increment_ip_request_count(self, client_ip):
         try:
+            logger.info(f"更新IP请求计数({client_ip}) - 准备获取统计锁")
             if self.stats_lock.acquire(timeout=2):
                 try:
+                    logger.info(f"更新IP请求计数({client_ip}) - 成功获取统计锁")
                     self.request_count += 1
                     self.ip_request_count[client_ip] = self.ip_request_count.get(client_ip, 0) + 1
+                    logger.info(f"更新IP请求计数({client_ip}) - 计数更新完成")
                 finally:
                     self.stats_lock.release()
+                    logger.info(f"更新IP请求计数({client_ip}) - 已释放统计锁")
             else:
                 logger.error(f"更新IP请求计数锁超时，客户端IP: {client_ip}")
         except Exception as e:
@@ -122,8 +178,10 @@ class ClusterManager:
             current_time = time.time()
             elapsed_hours = (current_time - self.start_time) / 3600
             try:
+                logger.info("打印小时统计 - 准备获取统计锁")
                 if self.stats_lock.acquire(timeout=5):
                     try:
+                        logger.info("打印小时统计 - 成功获取统计锁")
                         logger.info(f"=== 运行统计 ===")
                         logger.info(f"当前时间: {time.strftime('%H:%M:%S')}")
                         logger.info(f"已运行时长: {elapsed_hours:.1f} 小时")
@@ -133,6 +191,7 @@ class ClusterManager:
                             logger.info(f"  {ip}: {count} 次")
                     finally:
                         self.stats_lock.release()
+                        logger.info("打印小时统计 - 已释放统计锁")
                 else:
                     logger.error("获取统计锁超时，跳过本次统计")
             except Exception as e:
@@ -158,6 +217,14 @@ class ClusterManager:
             return 1
 
     def is_container_available(self, container_name):
+        # 先查缓存
+        now = time.time()
+        if container_name in self.container_status_cache:
+            cached_status, cache_time = self.container_status_cache[container_name]
+            if now - cache_time < self.cache_expire:
+                logger.info(f"容器 {container_name} 从缓存获取状态: {'可用' if cached_status else '不可用'}")
+                return cached_status
+        
         logger.info(f"检查容器可用性: {container_name}")
         try:
             # 检查容器是否运行
@@ -171,10 +238,12 @@ class ClusterManager:
             )
             if result.returncode != 0:
                 logger.warning(f"容器状态检查失败: {result.stderr}")
+                self.container_status_cache[container_name] = (False, now)
                 return False
             
             if result.stdout.strip() != "true":
                 logger.info(f"容器 {container_name} 未运行")
+                self.container_status_cache[container_name] = (False, now)
                 return False
 
             # 检查Hadoop服务
@@ -199,61 +268,101 @@ class ClusterManager:
 
             if not hadoop_running:
                 logger.info(f"容器 {container_name} 内Hadoop未启动")
+                self.container_status_cache[container_name] = (False, now)
                 return False
 
+            # 缓存结果
+            self.container_status_cache[container_name] = (True, now)
             logger.info(f"容器 {container_name} 可用")
             return True
         except Exception as e:
+            self.container_status_cache[container_name] = (False, now)
             logger.warning(f"容器可用性检查失败: {str(e)}")
             return False
         
     def update_available_containers(self):
-        logger.info("更新可用容器列表")
+        logger.info("更新可用容器列表 - 开始")
         try:
+            # 1. 先获取所有容器列表（耗时操作，移出锁范围）
+            all_masters = []
+            try:
+                result = subprocess.check_output(
+                    "docker ps --filter 'name=hadoop-master-' --format '{{.Names}}' | sort",
+                    shell=True,
+                    encoding='utf-8',
+                    timeout=5
+                )
+                all_masters = result.splitlines()
+                logger.info(f"获取容器列表成功，共 {len(all_masters)} 个容器")
+            except Exception as e:
+                logger.error(f"获取容器列表失败: {str(e)}，使用兜底列表")
+                all_masters = ["hadoop-master-0"]
+                
+            # 2. 检查每个容器可用性（耗时操作，移出锁范围）
+            available = []
+            for master in all_masters:
+                # 短时间获取锁，判断是否在缩容黑名单
+                in_shrinking = False
+                logger.info(f"检查容器 {master} - 准备获取容器锁（判断缩容状态）")
+                if self.container_lock.acquire(timeout=2):
+                    try:
+                        logger.info(f"检查容器 {master} - 成功获取容器锁（判断缩容状态）")
+                        in_shrinking = master in self.shrinking_containers
+                        logger.info(f"检查容器 {master} - 缩容状态: {'是' if in_shrinking else '否'}")
+                    finally:
+                        self.container_lock.release()
+                        logger.info(f"检查容器 {master} - 已释放容器锁（判断缩容状态）")
+                if in_shrinking:
+                    logger.info(f"容器 {master} 在缩容黑名单中，跳过可用性检查")
+                    continue
+                # 容器可用性检查（耗时，无锁）
+                if self.is_container_available(master):
+                    available.append(master)    
+                    
+            # 3. 仅更新共享变量时持有锁（缩短锁持有时间）
+            logger.info("更新可用容器列表 - 准备获取容器锁（更新列表）")
             if self.container_lock.acquire(timeout=5):
                 try:
-                    all_masters = []
-                    try:
-                        result = subprocess.check_output(
-                            "docker ps --filter 'name=hadoop-master-' --format '{{.Names}}' | sort",
-                            shell=True,
-                            encoding='utf-8',
-                            timeout=5
-                        )
-                        all_masters = result.splitlines()
-                    except Exception as e:
-                        logger.error(f"获取容器列表失败: {str(e)}，使用兜底列表")
-                        all_masters = ["hadoop-master-0"]
-
-                    # 过滤可用容器
-                    available = []
-                    for master in all_masters:
-                        if master not in self.shrinking_containers and self.is_container_available(master):
-                            available.append(master)
-                    
+                    logger.info("更新可用容器列表 - 成功获取容器锁（更新列表）")
                     self.available_containers = available
+                    self.last_container_update = time.time()  # 更新时间戳
                     logger.info(f"可用容器列表: {self.available_containers}（缩容黑名单：{self.shrinking_containers}）")
                 finally:
                     self.container_lock.release()
+                    logger.info("更新可用容器列表 - 已释放容器锁（更新列表）")
             else:
-                logger.error("获取容器锁超时，无法更新可用容器")
+                logger.error("更新可用容器列表 - 获取容器锁超时，无法更新可用容器")            
         except Exception as e:
             logger.error(f"更新可用容器异常: {str(e)}")
-            with self.container_lock:
-                self.available_containers = ["hadoop-master-0"]
-
-    def reassign_pending_tasks(self):
-        logger.info("重分配待处理任务")
-        try:
+            # 异常时兜底更新
+            logger.info("更新可用容器列表 - 异常兜底，准备获取容器锁")
             if self.container_lock.acquire(timeout=5):
                 try:
+                    logger.info("更新可用容器列表 - 异常兜底，成功获取容器锁")
+                    self.available_containers = ["hadoop-master-0"]
+                    self.last_container_update = time.time()
+                    logger.info("更新可用容器列表 - 异常兜底，可用容器列表设为默认")
+                finally:
+                    self.container_lock.release()
+                    logger.info("更新可用容器列表 - 异常兜底，已释放容器锁")
+        logger.info("更新可用容器列表 - 结束")
+
+    def reassign_pending_tasks(self):
+        logger.info("重分配待处理任务 - 开始")
+        try:
+            logger.info("重分配待处理任务 - 准备获取容器锁")
+            if self.container_lock.acquire(timeout=5):
+                try:
+                    logger.info("重分配待处理任务 - 成功获取容器锁")
                     self.update_available_containers()
                     if len(self.available_containers) <= 1:
                         logger.info("可用容器数<=1，无需重分配")
                         return
 
+                    logger.info("重分配待处理任务 - 准备获取任务锁")
                     if self.task_lock.acquire(timeout=5):
                         try:
+                            logger.info("重分配待处理任务 - 成功获取任务锁")
                             reassigned = 0
                             for idx, task in enumerate(self.task_queue):
                                 if task.get("container") == "hadoop-master-0" and task.get("status") != "running":
@@ -264,27 +373,33 @@ class ClusterManager:
                             logger.info(f"完成重分配，共 {reassigned} 个任务")
                         finally:
                             self.task_lock.release()
+                            logger.info("重分配待处理任务 - 已释放任务锁")
                     else:
-                        logger.error("获取任务锁超时，无法重分配")
+                        logger.error("重分配待处理任务 - 获取任务锁超时，无法重分配")
                 finally:
                     self.container_lock.release()
+                    logger.info("重分配待处理任务 - 已释放容器锁")
             else:
-                logger.error("获取容器锁超时，无法重分配")
+                logger.error("重分配待处理任务 - 获取容器锁超时，无法重分配")
         except Exception as e:
             logger.error(f"任务重分配异常: {str(e)}")
+        logger.info("重分配待处理任务 - 结束")
 
     def reassign_task(self, task):
-        logger.info(f"重分配任务: {task['uuid']}（当前容器：{task['container']}）")
+        logger.info(f"重分配任务: {task['uuid']}（当前容器：{task['container']}）- 开始")
         try:
+            logger.info(f"重分配任务 {task['uuid']} - 准备获取容器锁")
             if self.container_lock.acquire(timeout=5):
                 try:
+                    logger.info(f"重分配任务 {task['uuid']} - 成功获取容器锁")
                     task["status"] = "pending"
                     self.update_available_containers()
                     available_masters = self.available_containers.copy()
                 finally:
                     self.container_lock.release()
+                    logger.info(f"重分配任务 {task['uuid']} - 已释放容器锁")
             else:
-                logger.error(f"获取容器锁超时，任务 {task['uuid']} 重分配失败")
+                logger.error(f"重分配任务 {task['uuid']} - 获取容器锁超时，重分配失败")
                 return
 
             if not available_masters:
@@ -302,19 +417,23 @@ class ClusterManager:
             new_container = available_masters[task_count % len(available_masters)]
             logger.info(f"任务 {task['uuid']} 重分配到 {new_container}")
 
+            logger.info(f"重分配任务 {task['uuid']} - 准备获取任务锁")
             if self.task_lock.acquire(timeout=5):
                 try:
+                    logger.info(f"重分配任务 {task['uuid']} - 成功获取任务锁")
                     task["container"] = new_container
                     task["status"] = "pending"
                 finally:
                     self.task_lock.release()
+                    logger.info(f"重分配任务 {task['uuid']} - 已释放任务锁")
             else:
-                logger.error(f"获取任务锁超时，任务 {task['uuid']} 重分配失败")
+                logger.error(f"重分配任务 {task['uuid']} - 获取任务锁超时，重分配失败")
         except Exception as e:
             logger.error(f"任务重分配异常: {str(e)}")
+        logger.info(f"重分配任务: {task['uuid']} - 结束")
 
     def extend_cluster(self, target_num):
-        logger.info(f"扩容逻辑启动，目标: {target_num}")
+        logger.info(f"扩容逻辑启动，目标: {target_num} - 开始")
         try:
             if target_num > MAX_HADOOP_GROUPS:
                 target_num = MAX_HADOOP_GROUPS
@@ -360,14 +479,20 @@ class ClusterManager:
             logger.error("扩容脚本超时（5分钟）")
         except Exception as e:
             logger.error(f"扩容逻辑异常: {str(e)}")
+        logger.info(f"扩容逻辑启动，目标: {target_num} - 结束")
 
     def get_tasks_running_containers(self):
         try:
+            logger.info("获取运行中容器 - 准备获取任务锁")
             if self.task_lock.acquire(timeout=5):
                 try:
-                    return {task["container"] for task in self.task_queue if task.get("status") == "running"}
+                    logger.info("获取运行中容器 - 成功获取任务锁")
+                    running_containers = {task["container"] for task in self.task_queue if task.get("status") == "running"}
+                    logger.info(f"获取运行中容器 - 结果: {running_containers}")
+                    return running_containers
                 finally:
                     self.task_lock.release()
+                    logger.info("获取运行中容器 - 已释放任务锁")
             else:
                 logger.error("获取任务锁超时，返回空运行容器集")
                 return set()
@@ -376,6 +501,7 @@ class ClusterManager:
             return set()
 
     def reduce_cluster(self, target_num):
+        logger.info(f"缩容逻辑启动，目标: {target_num} - 开始")
         with self.task_lock:
             if len(self.task_queue) > 0:
                 logger.info(f"任务列表非空（{len(self.task_queue)}个），不缩容")
@@ -388,15 +514,19 @@ class ClusterManager:
             logger.info(f"目标{target_num}≥当前{current_num}，不缩容")
             return
 
+        logger.info("缩容逻辑 - 准备获取缩容锁")
         if not self.shrink_lock.acquire(blocking=False):
             logger.info("已有缩容操作，跳过本次")
             return
 
         try:
+            logger.info("缩容逻辑 - 成功获取缩容锁")
             logger.info(f"缩容集群: {current_num} -> {target_num}")
             containers_to_delete = [f"hadoop-master-{i}" for i in range(target_num, current_num)]
             
+            logger.info("缩容逻辑 - 准备获取容器锁（更新黑名单）")
             with self.container_lock:
+                logger.info("缩容逻辑 - 成功获取容器锁（更新黑名单）")
                 self.shrinking_containers.update(containers_to_delete)
             logger.info(f"缩容黑名单新增: {containers_to_delete}")
 
@@ -420,19 +550,25 @@ class ClusterManager:
         except Exception as e:
             logger.error(f"缩容逻辑异常: {str(e)}")
         finally:
+            logger.info("缩容逻辑 - 准备获取容器锁（移除黑名单）")
             with self.container_lock:
+                logger.info("缩容逻辑 - 成功获取容器锁（移除黑名单）")
                 self.shrinking_containers.difference_update(containers_to_delete)
             self.shrink_lock.release()
-            logger.info(f"缩容结束，黑名单移除: {containers_to_delete}")
+            logger.info(f"缩容结束，黑名单移除: {containers_to_delete}，已释放缩容锁")
+        logger.info(f"缩容逻辑启动，目标: {target_num} - 结束")
 
     def add_task(self, task):
         try:
+            logger.info(f"添加任务 {task['uuid']} - 准备获取任务锁")
             if self.task_lock.acquire(timeout=5):
                 try:
+                    logger.info(f"添加任务 {task['uuid']} - 成功获取任务锁")
                     self.task_queue.append(task)
                     logger.info(f"任务 {task['uuid']} 加入队列，当前队列长度: {len(self.task_queue)}")
                 finally:
                     self.task_lock.release()
+                    logger.info(f"添加任务 {task['uuid']} - 已释放任务锁")
             else:
                 logger.error(f"获取任务锁超时，任务 {task['uuid']} 加入失败")
         except Exception as e:
@@ -440,13 +576,16 @@ class ClusterManager:
 
     def remove_task(self, uuid):
         try:
+            logger.info(f"移除任务 {uuid} - 准备获取任务锁")
             if self.task_lock.acquire(timeout=5):
                 try:
+                    logger.info(f"移除任务 {uuid} - 成功获取任务锁")
                     original_length = len(self.task_queue)
                     self.task_queue = [t for t in self.task_queue if t['uuid'] != uuid]
                     logger.info(f"任务 {uuid} 从队列移除，队列长度变化: {original_length} -> {len(self.task_queue)}")
                 finally:
                     self.task_lock.release()
+                    logger.info(f"移除任务 {uuid} - 已释放任务锁")
             else:
                 logger.error(f"获取任务锁超时，任务 {uuid} 移除失败")
         except Exception as e:
@@ -482,13 +621,17 @@ class ClusterManager:
         while True:
             pending_tasks = []
             # 短时间持有锁，获取待处理任务
+            logger.info("process_tasks - 准备获取任务锁（获取待处理任务）")
             if self.task_lock.acquire(timeout=5):
                 try:
+                    logger.info("process_tasks - 成功获取任务锁（获取待处理任务）")
                     pending_tasks = [t for t in self.task_queue if t.get("status") != "running"]
                     for task in pending_tasks:
                         task["status"] = "running"
+                    logger.info(f"process_tasks - 获取待处理任务 {len(pending_tasks)} 个")
                 finally:
                     self.task_lock.release()
+                    logger.info("process_tasks - 已释放任务锁（获取待处理任务）")
             else:
                 logger.error("获取任务锁超时，跳过本轮任务处理")
                 time.sleep(2)
@@ -499,7 +642,9 @@ class ClusterManager:
                 try:
                     container = task["container"]
                     in_shrinking = False
+                    logger.info(f"处理任务 {task['uuid']} - 准备获取容器锁（检查缩容状态）")
                     with self.container_lock:
+                        logger.info(f"处理任务 {task['uuid']} - 成功获取容器锁（检查缩容状态）")
                         in_shrinking = container in self.shrinking_containers
                     
                     if in_shrinking or not self.is_container_available(container):
@@ -770,6 +915,7 @@ def handler_hadoop():
         data = request.get_json()
         logger.info(f"Received /hadoop 请求: {data}")
         client_ip = request.remote_addr
+        now = time.time()
 
         required = ["input", "output", "callback_url"]
         if not all(p in data for p in required):
@@ -810,8 +956,29 @@ def handler_hadoop():
         # 重试获取可用容器
         while retry_count < max_retry and not selected_master:
             try:
-                cluster_manager.update_available_containers()
+                # 优化：仅当可用容器列表为空或超过10秒未更新时才触发更新
+                update_needed = False
+                logger.info(f"任务 {uuid_str} - 准备获取容器锁（判断是否需要更新列表）")
+                if cluster_manager.container_lock.acquire(timeout=2):
+                    try:
+                        logger.info(f"任务 {uuid_str} - 成功获取容器锁（判断是否需要更新列表）")
+                        last_update = cluster_manager.last_container_update
+                        if now - last_update > 10 or not cluster_manager.available_containers:
+                            update_needed = True
+                            logger.info(f"任务 {uuid_str} - 需要更新容器列表（上次更新于 {last_update}）")
+                        else:
+                            logger.info(f"任务 {uuid_str} - 无需更新容器列表（上次更新于 {last_update}）")
+                    finally:
+                        cluster_manager.container_lock.release()
+                        logger.info(f"任务 {uuid_str} - 已释放容器锁（判断是否需要更新列表）")
+                
+                if update_needed:
+                    cluster_manager.update_available_containers()
+                
+                # 获取可用容器列表
+                logger.info(f"任务 {uuid_str} - 准备获取容器锁（获取可用列表）")
                 with cluster_manager.container_lock:
+                    logger.info(f"任务 {uuid_str} - 成功获取容器锁（获取可用列表）")
                     available_masters = cluster_manager.available_containers.copy()
                 
                 if not available_masters:
